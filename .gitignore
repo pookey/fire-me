@@ -1,0 +1,42 @@
+# Dependencies
+node_modules/
+
+# Build outputs
+dist/
+cdk.out/
+
+# Environment
+.env
+.env.local
+.env.production
+
+# CDK outputs
+cdk-outputs.json
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Claude Code memory
+.claude/memory/
+
+# Data files
+*.csv
+
+# OS
+.DS_Store
+Thumbs.db
+
+# CDK
+cdk.context.json
+
+# npm
+package-lock.json
+
+# TypeScript compiled output (infrastructure)
+infrastructure/dist/
+infrastructure/**/*.js
+infrastructure/**/*.d.ts
+infrastructure/**/*.js.map

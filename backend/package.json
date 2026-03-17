@@ -1,0 +1,25 @@
+{
+  "name": "fintrack-backend",
+  "version": "1.0.0",
+  "description": "FinTrack backend Lambda functions",
+  "main": "dist/handlers/funds.js",
+  "scripts": {
+    "build": "esbuild src/handlers/funds.ts src/handlers/snapshots.ts src/handlers/fireConfig.ts src/handlers/import.ts src/handlers/incomeExpenses.ts --bundle --platform=node --target=node20 --outdir=dist/handlers --external:@aws-sdk/*",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "@aws-sdk/client-dynamodb": "^3.0.0",
+    "@aws-sdk/lib-dynamodb": "^3.0.0",
+    "uuid": "^9.0.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.0.0",
+    "@types/aws-lambda": "^8.0.0",
+    "@types/node": "^20.0.0",
+    "@types/uuid": "^9.0.0",
+    "esbuild": "^0.20.0"
+  }
+}

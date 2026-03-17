@@ -1,0 +1,25 @@
+{
+  "name": "infrastructure",
+  "version": "0.1.0",
+  "bin": {
+    "infrastructure": "bin/infrastructure.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "watch": "tsc -w",
+    "cdk": "cdk",
+    "deploy": "npx cdk deploy",
+    "diff": "npx cdk diff",
+    "synth": "npx cdk synth"
+  },
+  "devDependencies": {
+    "aws-cdk": "2.178.2",
+    "typescript": "~5.7.0",
+    "@types/node": "22.12.0"
+  },
+  "dependencies": {
+    "aws-cdk-lib": "2.178.2",
+    "constructs": "^10.0.0",
+    "source-map-support": "^0.5.21"
+  }
+}
