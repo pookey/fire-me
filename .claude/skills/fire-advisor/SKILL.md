@@ -39,19 +39,21 @@ When the conversation begins:
 
 ### Authentication
 
-The API requires a Cognito JWT token. To authenticate:
+The API requires a Cognito JWT token. All config is stored in `.env` in the project root (see `.env.example` for the template). After running `deploy.sh`, most values are auto-populated.
 
-1. Read the password from the `.env` file in the project root (key: `FINTRACK_PASSWORD`). If the password is empty, ask the user to fill it in.
-2. Call Cognito to get an access token using the AWS CLI. **Important:** Read the password from the file using a subshell to avoid shell interpretation of special characters (like `!`):
+To authenticate:
+
+1. Source the `.env` file to load config. If `FINTRACK_PASSWORD`, `COGNITO_CLIENT_ID`, or `COGNITO_USERNAME` are missing, ask the user to fill them in (see `.env.example`).
+2. Call Cognito to get an access token:
 
 ```bash
-PASSWORD=$(grep FINTRACK_PASSWORD .env | cut -d= -f2-)
+set -a && source .env && set +a
 aws cognito-idp initiate-auth \
   --region eu-west-2 \
-  --client-id <your-cognito-client-id> \
+  --client-id "$COGNITO_CLIENT_ID" \
   --auth-flow USER_PASSWORD_AUTH \
-  --auth-parameters "USERNAME=<your-email>,PASSWORD=$PASSWORD" \
-  --profile <your-aws-profile> \
+  --auth-parameters "USERNAME=$COGNITO_USERNAME,PASSWORD=$FINTRACK_PASSWORD" \
+  --profile "$AWS_PROFILE" \
   --query 'AuthenticationResult.IdToken' \
   --output text
 ```
@@ -71,7 +73,7 @@ curl -s -H "Authorization: Bearer $TOKEN" "$API_BASE_URL/funds"
 
 ### API Details
 
-- **Base URL:** Your API Gateway URL (from CDK outputs after deployment)
+- **Base URL:** From `.env` (`API_BASE_URL`) — auto-populated by `deploy.sh`
 - **Auth:** Bearer token (Cognito IdToken, see above)
 
 ### API Endpoints

@@ -66,9 +66,12 @@ It is safe to delete all data from DynamoDB and re-import from the CSV at any ti
 
 ## AWS Details
 
-- AWS profile: `your-aws-profile`
+Configure your deployment in `.env` (see `.env.example` for the template):
+- `AWS_PROFILE` — your AWS CLI profile name
+- `FINTRACK_DOMAIN`, `FINTRACK_HOSTED_ZONE_ID`, `FINTRACK_ZONE_NAME` — your Route53 domain config
 - Primary region: `eu-west-2` (cert in `us-east-1`)
-- Domain: `your-domain.example.com` (configure in Route53)
+
+After first deploy, `deploy.sh` auto-populates `API_BASE_URL` and `COGNITO_CLIENT_ID` in `.env`.
 
 ## Frontend Environment Variables
 

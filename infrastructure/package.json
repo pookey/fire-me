@@ -8,9 +8,9 @@
     "build": "tsc",
     "watch": "tsc -w",
     "cdk": "cdk",
-    "deploy": "npx cdk deploy",
-    "diff": "npx cdk diff",
-    "synth": "npx cdk synth"
+    "deploy": "npx cdk deploy --profile ${AWS_PROFILE:-default}",
+    "diff": "npx cdk diff --profile ${AWS_PROFILE:-default}",
+    "synth": "npx cdk synth --profile ${AWS_PROFILE:-default}"
   },
   "devDependencies": {
     "aws-cdk": "2.178.2",

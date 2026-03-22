@@ -1,9 +1,18 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+ROOT_DIR="$(cd "$(dirname "$0")" && pwd)"
+
+# Load local config from .env (AWS_PROFILE, domain, etc.)
+# shellcheck disable=SC1091
+if [ -f "$ROOT_DIR/.env" ]; then
+  set -a
+  source "$ROOT_DIR/.env"
+  set +a
+fi
+
 PROFILE="${AWS_PROFILE:-default}"
 REGION="eu-west-2"
-ROOT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
 echo "=========================================="
 echo "  FinTrack Deploy"
@@ -135,9 +144,34 @@ if [ "$USER_COUNT" = "0" ]; then
     --region "$REGION" > /dev/null
 
   echo "  ✓ User $USER_EMAIL created and confirmed"
+
+  # Save username to .env for fire-advisor skill
+  if grep -q '^COGNITO_USERNAME=' "$ROOT_DIR/.env" 2>/dev/null; then
+    sed -i '' "s|^COGNITO_USERNAME=.*|COGNITO_USERNAME=$USER_EMAIL|" "$ROOT_DIR/.env"
+  else
+    echo "COGNITO_USERNAME=$USER_EMAIL" >> "$ROOT_DIR/.env"
+  fi
 else
   echo "  Found $USER_COUNT existing user(s), skipping"
 fi
+echo ""
+
+# ------------------------------------------
+# Auto-populate .env with deploy outputs
+# ------------------------------------------
+echo "▸ Updating .env with deploy outputs..."
+update_env() {
+  local key="$1" value="$2" file="$ROOT_DIR/.env"
+  touch "$file"
+  if grep -q "^${key}=" "$file" 2>/dev/null; then
+    sed -i '' "s|^${key}=.*|${key}=${value}|" "$file"
+  else
+    echo "${key}=${value}" >> "$file"
+  fi
+}
+update_env "API_BASE_URL" "$API_URL"
+update_env "COGNITO_CLIENT_ID" "$USER_POOL_CLIENT_ID"
+echo "  ✓ .env updated (API_BASE_URL, COGNITO_CLIENT_ID)"
 echo ""
 
 # ------------------------------------------
