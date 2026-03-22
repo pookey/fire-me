@@ -3,6 +3,7 @@ export type TaxWrapper = 'isa' | 'lisa' | 'sipp' | 'gia' | 'none';
 export interface Fund {
   id: string;
   name: string;
+  description?: string;
   category: 'savings' | 'pension' | 'property';
   subcategory: 'equities' | 'bonds' | 'cash' | 'property';
   wrapper?: TaxWrapper;

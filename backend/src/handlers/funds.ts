@@ -39,6 +39,7 @@ export const handler: APIGatewayProxyHandlerV2 = async (event) => {
         active: body.active ?? true,
         sortOrder: body.sortOrder ?? 0,
       };
+      if (body.description !== undefined) item.description = body.description;
       if (body.drawdownAge !== undefined) item.drawdownAge = body.drawdownAge;
       if (body.monthlyContribution !== undefined) item.monthlyContribution = body.monthlyContribution;
       if (body.contributionEndAge !== undefined) item.contributionEndAge = body.contributionEndAge;
@@ -65,7 +66,7 @@ export const handler: APIGatewayProxyHandlerV2 = async (event) => {
       const expressionValues: Record<string, unknown> = {};
       const expressionNames: Record<string, string> = {};
 
-      const updatableFields = ["name", "category", "subcategory", "wrapper", "active", "sortOrder", "drawdownAge", "monthlyContribution", "contributionEndAge", "take25PctLumpSum"];
+      const updatableFields = ["name", "description", "category", "subcategory", "wrapper", "active", "sortOrder", "drawdownAge", "monthlyContribution", "contributionEndAge", "take25PctLumpSum"];
       for (const field of updatableFields) {
         if (body[field] !== undefined) {
           expressionParts.push(`#${field} = :${field}`);

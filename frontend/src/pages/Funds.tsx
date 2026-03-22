@@ -6,6 +6,7 @@ type FundForm = Omit<Fund, 'id'>;
 
 const emptyForm: FundForm = {
   name: '',
+  description: '',
   category: 'savings',
   subcategory: 'equities',
   wrapper: 'gia',
@@ -50,6 +51,7 @@ export default function Funds() {
   const handleEdit = (fund: Fund) => {
     setForm({
       name: fund.name,
+      description: fund.description ?? '',
       category: fund.category,
       subcategory: fund.subcategory,
       wrapper: fund.wrapper ?? (fund.category === 'pension' ? 'sipp' : 'gia'),
@@ -128,6 +130,16 @@ export default function Funds() {
                   onChange={e => setForm(prev => ({ ...prev, name: e.target.value }))}
                   required
                   className="input-dark"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-medium mb-1.5" style={{ color: 'var(--text-tertiary)' }}>Description</label>
+                <textarea
+                  value={form.description ?? ''}
+                  onChange={e => setForm(prev => ({ ...prev, description: e.target.value }))}
+                  placeholder="Optional — e.g. purpose, notes for FIRE advisor"
+                  rows={2}
+                  className="input-dark resize-y"
                 />
               </div>
               <div>
@@ -271,7 +283,14 @@ export default function Funds() {
             <tbody>
               {funds.map(fund => (
                 <tr key={fund.id} style={{ opacity: fund.active ? 1 : 0.4 }}>
-                  <td className="td-primary">{fund.name}</td>
+                  <td className="td-primary">
+                    {fund.name}
+                    {fund.description && (
+                      <div className="text-xs mt-0.5 font-normal" style={{ color: 'var(--text-tertiary)' }}>
+                        {fund.description}
+                      </div>
+                    )}
+                  </td>
                   <td className="capitalize">{fund.category}</td>
                   <td className="capitalize">{fund.subcategory}</td>
                   <td className="uppercase">{fund.wrapper ?? '-'}</td>

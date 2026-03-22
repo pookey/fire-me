@@ -86,22 +86,13 @@ curl -s -H "Authorization: Bearer $TOKEN" "$API_BASE_URL/funds"
 
 **Important**: Snapshot values are stored in **pence**. Always convert to pounds (divide by 100) when displaying to the user.
 
-### Fund Structure (13 funds)
-| Fund | Category | Subcategory | Wrapper | Active |
-|------|----------|-------------|---------|--------|
-| Mortgage Equity | property | property | none | yes |
-| Premium Bonds | savings | cash | none | yes |
-| Emergency Fund | savings | cash | none | yes |
-| Vanguard ISA | savings | equities | isa | yes |
-| Vanguard GIA | savings | equities | gia | yes |
-| Nutmeg ISA | savings | equities | isa | no |
-| Nutmeg LISA | savings | equities | isa | yes |
-| Nutmeg Pension | pension | equities | sipp | yes |
-| Aviva Pension | pension | equities | sipp | yes |
-| NowPensions | pension | equities | sipp | no |
-| Vanguard Pension | pension | equities | sipp | yes |
-| Scottish Widows | pension | equities | sipp | yes |
-| Stocks | savings | equities | gia | yes |
+### Fund Structure
+Funds are defined dynamically in the database — **do not assume any specific funds exist**. Fetch them from `GET /funds` at the start of each session. Each fund has:
+- `name`, `category` (savings/pension/property), `subcategory` (equities/bonds/cash/property), `wrapper` (isa/lisa/sipp/gia/none), `active` (boolean)
+- `description` (optional) — a free-text field where the user can provide context about a fund's purpose (e.g. "savings for home renovation", "old employer pension — not contributing"). **Always read fund descriptions** to understand the user's intent and situation for each fund. Use this context when giving advice.
+- Projection fields: `drawdownAge`, `monthlyContribution`, `contributionEndAge`, `take25PctLumpSum`
+
+Inactive funds are closed/transferred — include their history but note they're closed.
 
 ### FIRE Calculator
 The projection engine is at `frontend/src/utils/fireCalculator.ts`. Read it to understand the calculation logic. Key inputs:
@@ -192,9 +183,10 @@ Use `runStressTest()` to programmatically test bridge survival. The function tak
 
 ## Things to Watch Out For
 
-- **Don't assume** — if you need information to give good advice, ask for it
+- **Don't assume** — if you need information to give good advice, ask for it. Don't assume which funds exist — always fetch from the API.
+- **Read fund descriptions** — fund descriptions contain important user-provided context about each fund's purpose and plans. Use this to inform your advice.
 - **Pence vs pounds** — snapshot values from the API are in pence. Always display in pounds.
-- **Inactive funds** — Nutmeg ISA and NowPensions are marked inactive (closed/transferred). Include their history but note they're closed.
-- **Property equity** — mortgage equity is an asset but not liquid. Don't count it toward accessible FIRE numbers unless the client plans to downsize.
+- **Inactive funds** — funds marked inactive are closed/transferred. Include their history but note they're closed.
+- **Property equity** — property funds are assets but not liquid. Don't count them toward accessible FIRE numbers unless the client plans to downsize.
 - **LISA penalty** — withdrawals before 60 incur a 25% penalty (losing the bonus + more). Factor this into accessibility.
 - **Inflation** — always flag whether numbers are nominal or real (today's money). Real terms are more meaningful for planning.
