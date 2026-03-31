@@ -1,5 +1,5 @@
 import { Amplify } from 'aws-amplify';
-import { signIn as amplifySignIn, signOut as amplifySignOut, getCurrentUser as amplifyGetCurrentUser, fetchAuthSession } from '@aws-amplify/auth';
+import { signIn as amplifySignIn, signOut as amplifySignOut, getCurrentUser as amplifyGetCurrentUser, fetchAuthSession, confirmResetPassword as amplifyConfirmResetPassword, confirmSignIn as amplifyConfirmSignIn } from '@aws-amplify/auth';
 
 Amplify.configure({
   Auth: {
@@ -20,6 +20,14 @@ export async function signOut() {
 
 export async function getCurrentUser() {
   return amplifyGetCurrentUser();
+}
+
+export async function confirmPasswordReset(username: string, confirmationCode: string, newPassword: string) {
+  return amplifyConfirmResetPassword({ username, confirmationCode, newPassword });
+}
+
+export async function confirmNewPassword(newPassword: string) {
+  return amplifyConfirmSignIn({ challengeResponse: newPassword });
 }
 
 export async function getAuthToken(): Promise<string> {
