@@ -55,6 +55,7 @@ function makeResult(config: FireConfig, retirementAge: number): FireResult {
   return {
     projections,
     fireDates: [{ withdrawalRate: 4, age: retirementAge, year: currentYear + (retirementAge - currentAge) }],
+    weightedAccessibleGrowthRate: 0.07,
   };
 }
 
@@ -162,6 +163,7 @@ describe('stressTestCalculator', () => {
         definedBenefitIncome: 0,
       }],
       fireDates: [],
+      weightedAccessibleGrowthRate: 0.07,
     };
 
     const stressResult = runStressTest(tinyResult, config, funds, tinySnapshots, [], 50);

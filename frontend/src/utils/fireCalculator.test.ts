@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { calculateFireProjections, calculateIncomeTax, calculateCGT } from './fireCalculator';
-import type { Fund, Snapshot, FireConfig, TaxConfig } from '../types';
+import { calculateFireProjections, calculateIncomeTax, calculateCGT, findSubYearFireFraction } from './fireCalculator';
+import type { Fund, Snapshot, FireConfig, TaxConfig, FireProjection } from '../types';
 
 // --- Test helpers ---
 
@@ -1270,6 +1270,88 @@ describe('fireCalculator', () => {
       const result = calculateFireProjections(funds, snapshots, config);
 
       expect(result.targetAnalysis).toBeUndefined();
+    });
+  });
+
+  describe('findSubYearFireFraction', () => {
+    const makeRow = (overrides: Partial<FireProjection>): FireProjection => ({
+      age: 40,
+      year: 2030,
+      accessible: 0,
+      locked: 0,
+      total: 0,
+      annualSpend: 30000,
+      statePension: 0,
+      definedBenefitIncome: 0,
+      ...overrides,
+    });
+
+    it('returns fraction=0 when prevRow already satisfies FIRE', () => {
+      const prevRow = makeRow({ age: 49, accessible: 2_000_000, total: 2_000_000 });
+      const fireRow = makeRow({ age: 50, accessible: 2_100_000, total: 2_100_000 });
+      const result = findSubYearFireFraction({
+        prevRow,
+        fireRow,
+        withdrawalRate: 4,
+        pensionAccessAge: 57,
+        inflationRate: 0,
+        weightedAccessibleGrowthRate: 0.05,
+      });
+      expect(result.fraction).toBe(0);
+    });
+
+    it('returns a sub-year fraction for bridge-check-bound scenarios', () => {
+      // Raw pot threshold met at both rows, but accessible-only bridge doesn't
+      // survive until fireRow. Previously Dashboard would have collapsed this
+      // to fractionalYears = fireIndex (whole integer) and hidden all sub-year
+      // precision — this test locks in that we recover it.
+      const prevRow = makeRow({ age: 49, accessible: 140_000, total: 800_000, annualSpend: 30000 });
+      const fireRow = makeRow({ age: 50, accessible: 250_000, total: 900_000, annualSpend: 30000 });
+      const result = findSubYearFireFraction({
+        prevRow,
+        fireRow,
+        withdrawalRate: 4,
+        pensionAccessAge: 57,
+        inflationRate: 0,
+        weightedAccessibleGrowthRate: 0.05,
+      });
+      expect(result.fraction).toBeGreaterThan(0);
+      expect(result.fraction).toBeLessThan(1);
+      expect(result.bindingConstraint).toBe('bridge-check');
+    });
+
+    it('moves the fraction earlier when accessible funds grow', () => {
+      const base = {
+        withdrawalRate: 4,
+        pensionAccessAge: 57,
+        inflationRate: 0,
+        weightedAccessibleGrowthRate: 0.05,
+      };
+      const prevRowSmall = makeRow({ age: 49, accessible: 140_000, total: 800_000 });
+      const fireRowSmall = makeRow({ age: 50, accessible: 250_000, total: 900_000 });
+      const resultSmall = findSubYearFireFraction({ prevRow: prevRowSmall, fireRow: fireRowSmall, ...base });
+
+      // Add 20k to accessible at both rows — simulating an extra ISA contribution
+      const prevRowLarger = makeRow({ age: 49, accessible: 160_000, total: 820_000 });
+      const fireRowLarger = makeRow({ age: 50, accessible: 270_000, total: 920_000 });
+      const resultLarger = findSubYearFireFraction({ prevRow: prevRowLarger, fireRow: fireRowLarger, ...base });
+
+      expect(resultLarger.fraction).toBeLessThan(resultSmall.fraction);
+    });
+
+    it('reports pot-threshold when total is below required at prevRow', () => {
+      const prevRow = makeRow({ age: 49, accessible: 500_000, total: 500_000, annualSpend: 30000 });
+      const fireRow = makeRow({ age: 50, accessible: 900_000, total: 900_000, annualSpend: 30000 });
+      const result = findSubYearFireFraction({
+        prevRow,
+        fireRow,
+        withdrawalRate: 4,
+        pensionAccessAge: 40, // already past pension access — no bridge needed
+        inflationRate: 0,
+        weightedAccessibleGrowthRate: 0.05,
+      });
+      expect(result.bindingConstraint).toBe('pot-threshold');
+      expect(result.fraction).toBeGreaterThan(0);
     });
   });
 });

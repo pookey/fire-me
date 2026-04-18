@@ -1,5 +1,28 @@
 import type { Fund, Snapshot, FireConfig, FireProjection, FireResult, TaxConfig, TaxWrapper } from '../types';
 
+export type FireBindingConstraint = 'pot-threshold' | 'bridge-check' | 'none';
+
+export interface SubYearFireInput {
+  /** Projection row at fireIndex - 1 (year before FIRE). */
+  prevRow: FireProjection;
+  /** Projection row at fireIndex (FIRE year). */
+  fireRow: FireProjection;
+  /** Withdrawal rate as a percent (e.g. 4 for 4%). */
+  withdrawalRate: number;
+  pensionAccessAge: number;
+  /** Inflation rate as a percent (e.g. 3). */
+  inflationRate: number;
+  /** Weighted accessible growth rate as a decimal (e.g. 0.056). */
+  weightedAccessibleGrowthRate: number;
+}
+
+export interface SubYearFireResult {
+  /** Position within the FIRE year in [0, 1]; 0 = start of FIRE year (prevRow+1 year), 1 = fireRow date. */
+  fraction: number;
+  /** What prevented FIRE at the fraction just before the threshold. */
+  bindingConstraint: FireBindingConstraint;
+}
+
 type Bucket = { equities: number; bonds: number; cash: number; property: number };
 
 interface FundBalance {
@@ -148,6 +171,80 @@ function aggregateByWrapper(fundBalances: FundBalance[]): Record<TaxWrapper, Buc
     result[fb.wrapper][fb.subcategory] += fb.balance;
   }
   return result;
+}
+
+/**
+ * Binary-search within the FIRE year for the earliest fraction in [0, 1] where
+ * both the raw-pot threshold is met AND the accessible-funds bridge simulation
+ * survives to pension access age. Projection values between prevRow and fireRow
+ * are linearly interpolated.
+ */
+export function findSubYearFireFraction(input: SubYearFireInput): SubYearFireResult {
+  const { prevRow, fireRow, withdrawalRate, pensionAccessAge, inflationRate, weightedAccessibleGrowthRate } = input;
+  const lerp = (a: number, b: number, f: number) => a + (b - a) * f;
+
+  const satisfiesAt = (f: number): { satisfied: boolean; binding: FireBindingConstraint } => {
+    const age = lerp(prevRow.age, fireRow.age, f);
+    const total = lerp(prevRow.total, fireRow.total, f);
+    const accessible = lerp(prevRow.accessible, fireRow.accessible, f);
+    const annualSpend = lerp(prevRow.annualSpend, fireRow.annualSpend, f);
+    const statePension = lerp(prevRow.statePension, fireRow.statePension, f);
+    const dbIncome = lerp(prevRow.definedBenefitIncome ?? 0, fireRow.definedBenefitIncome ?? 0, f);
+    const guaranteed = statePension + dbIncome;
+    const netSpend = annualSpend - guaranteed;
+
+    if (netSpend <= 0) return { satisfied: true, binding: 'none' };
+
+    const requiredPot = netSpend / (withdrawalRate / 100);
+    const yearsToBridge = Math.max(0, pensionAccessAge - age);
+
+    if (yearsToBridge <= 0) {
+      return {
+        satisfied: accessible >= requiredPot,
+        binding: accessible >= requiredPot ? 'none' : 'pot-threshold',
+      };
+    }
+
+    if (total < requiredPot) {
+      return { satisfied: false, binding: 'pot-threshold' };
+    }
+
+    // Bridge simulation: mirror the annual loop in calculateFireProjections but
+    // allow a fractional final year.
+    let pot = accessible;
+    let spend = netSpend;
+    let remaining = yearsToBridge;
+    while (remaining > 0) {
+      const dt = Math.min(1, remaining);
+      pot -= spend * dt;
+      if (pot <= 0) return { satisfied: false, binding: 'bridge-check' };
+      pot *= Math.pow(1 + weightedAccessibleGrowthRate, dt);
+      spend *= Math.pow(1 + inflationRate / 100, dt);
+      remaining -= dt;
+    }
+    return { satisfied: true, binding: 'none' };
+  };
+
+  const fireCheck = satisfiesAt(1);
+  if (!fireCheck.satisfied) return { fraction: 1, bindingConstraint: fireCheck.binding };
+
+  const prevCheck = satisfiesAt(0);
+  if (prevCheck.satisfied) return { fraction: 0, bindingConstraint: 'none' };
+
+  let lo = 0;
+  let hi = 1;
+  let bindingAtLo: FireBindingConstraint = prevCheck.binding;
+  for (let i = 0; i < 24; i++) {
+    const mid = (lo + hi) / 2;
+    const { satisfied, binding } = satisfiesAt(mid);
+    if (satisfied) {
+      hi = mid;
+    } else {
+      lo = mid;
+      bindingAtLo = binding;
+    }
+  }
+  return { fraction: hi, bindingConstraint: bindingAtLo };
 }
 
 export function calculateFireProjections(
@@ -485,7 +582,7 @@ export function calculateFireProjections(
     };
   });
 
-  const result: FireResult = { projections, fireDates };
+  const result: FireResult = { projections, fireDates, weightedAccessibleGrowthRate };
 
   if (config.targetRetirementAge) {
     const targetProjection = projections.find(p => p.age === config.targetRetirementAge);

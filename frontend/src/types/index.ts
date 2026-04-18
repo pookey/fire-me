@@ -132,6 +132,8 @@ export interface FireProjection {
 export interface FireResult {
   projections: FireProjection[];
   fireDates: { withdrawalRate: number; age: number | null; year: number | null }[];
+  /** Balance-weighted growth rate of accessible (non-SIPP, non-LISA) funds, decimal e.g. 0.056. Used for sub-year bridge-check interpolation. */
+  weightedAccessibleGrowthRate: number;
   targetAnalysis?: {
     targetAge: number;
     isFeasible: boolean;

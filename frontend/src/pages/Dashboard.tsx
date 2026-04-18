@@ -1,9 +1,13 @@
-import { useEffect, useState, useMemo } from 'react';
+import { useEffect, useState, useMemo, useCallback } from 'react';
 import { getFunds, getSnapshots, getFireConfig } from '../utils/api';
-import { calculateFireProjections } from '../utils/fireCalculator';
+import { calculateFireProjections, findSubYearFireFraction } from '../utils/fireCalculator';
+import type { FireBindingConstraint } from '../utils/fireCalculator';
 import { formatPence, formatPenceShort, formatDate } from '../utils/formatters';
+import { calendarDaysUntil, workDaysUntil } from '../utils/workDays';
 import FundBreakdownChart from '../components/charts/FundBreakdownChart';
 import type { Fund, Snapshot, FireConfig, FireResult } from '../types';
+
+const DEBUG_FIRE = typeof window !== 'undefined' && new URLSearchParams(window.location.search).has('debug');
 
 export default function Dashboard() {
   const [funds, setFunds] = useState<Fund[]>([]);
@@ -12,7 +16,7 @@ export default function Dashboard() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
 
-  useEffect(() => {
+  const refetch = useCallback(() => {
     Promise.all([
       getFunds(),
       getSnapshots(),
@@ -26,6 +30,22 @@ export default function Dashboard() {
       .catch(err => setError(err.message))
       .finally(() => setLoading(false));
   }, []);
+
+  useEffect(() => {
+    refetch();
+  }, [refetch]);
+
+  useEffect(() => {
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') refetch();
+    };
+    document.addEventListener('visibilitychange', onVisible);
+    window.addEventListener('focus', refetch);
+    return () => {
+      document.removeEventListener('visibilitychange', onVisible);
+      window.removeEventListener('focus', refetch);
+    };
+  }, [refetch]);
 
   const dates = useMemo(() => [...new Set(snapshots.map(s => s.date))].sort().reverse(), [snapshots]);
   const latestDate = dates[0];
@@ -67,17 +87,78 @@ export default function Dashboard() {
     return { percent: Math.round(percent * 10) / 10, requiredPotPence };
   }, [fireConfig, fireResult, total]);
 
-  const yearsToFire = useMemo(() => {
-    if (!fireResult) return null;
-    const lowestRate = fireConfig ? Math.min(...fireConfig.withdrawalRates) : null;
-    if (!lowestRate) return null;
+  const fireCountdown = useMemo(() => {
+    if (!fireResult || !fireConfig || !latestDate) return null;
+    const lowestRate = Math.min(...fireConfig.withdrawalRates);
     const fd = fireResult.fireDates.find(d => d.withdrawalRate === lowestRate);
     if (!fd || fd.age === null) return null;
-    const birthYear = fireConfig ? new Date(fireConfig.dateOfBirth).getFullYear() : null;
-    if (!birthYear) return null;
-    const currentAge = new Date().getFullYear() - birthYear;
-    return Math.max(0, fd.age - currentAge);
-  }, [fireResult, fireConfig]);
+
+    const fireIndex = fireResult.projections.findIndex(p => p.age === fd.age);
+    const fireRow = fireIndex >= 0 ? fireResult.projections[fireIndex] : null;
+    const prevRow = fireIndex > 0 ? fireResult.projections[fireIndex - 1] : null;
+
+    let fractionalYears: number;
+    let bindingConstraint: FireBindingConstraint = 'none';
+    if (!fireRow || fireIndex === 0) {
+      fractionalYears = 0;
+    } else if (!prevRow) {
+      fractionalYears = fireIndex;
+    } else {
+      const sub = findSubYearFireFraction({
+        prevRow,
+        fireRow,
+        withdrawalRate: lowestRate,
+        pensionAccessAge: fireConfig.pensionAccessAge,
+        inflationRate: fireConfig.inflationRate,
+        weightedAccessibleGrowthRate: fireResult.weightedAccessibleGrowthRate,
+      });
+      fractionalYears = (fireIndex - 1) + sub.fraction;
+      bindingConstraint = sub.bindingConstraint;
+    }
+
+    // Anchor fireDate to the snapshot date the projections were built from,
+    // not "today" — otherwise fireDate moves forward each day in lockstep with
+    // today and the countdown never ticks down between snapshots.
+    const anchor = new Date(latestDate);
+    const msPerYear = 365.25 * 86_400_000;
+    const fireDate = new Date(anchor.getTime() + fractionalYears * msPerYear);
+
+    const today = new Date();
+    const years = Math.max(0, Math.round((fireDate.getTime() - today.getTime()) / msPerYear));
+    const days = calendarDaysUntil(today, fireDate);
+    const workDays = workDaysUntil(today, fireDate);
+
+    return {
+      years,
+      days,
+      workDays,
+      fractionalYears,
+      bindingConstraint,
+      fireDate,
+      anchor,
+      fireIndex,
+      fireRow,
+      prevRow,
+      lowestRate,
+      fdAge: fd.age,
+    };
+  }, [fireResult, fireConfig, latestDate]);
+
+  useEffect(() => {
+    if (!DEBUG_FIRE || !fireCountdown || !fireResult) return;
+    // eslint-disable-next-line no-console
+    console.info('[fire-debug]', {
+      anchor: fireCountdown.anchor.toISOString().slice(0, 10),
+      fireDate: fireCountdown.fireDate.toISOString().slice(0, 10),
+      fractionalYears: fireCountdown.fractionalYears,
+      binding: fireCountdown.bindingConstraint,
+      fdAge: fireCountdown.fdAge,
+      fireIndex: fireCountdown.fireIndex,
+      weightedAccessibleGrowthRate: fireResult.weightedAccessibleGrowthRate,
+      prevRow: fireCountdown.prevRow,
+      fireRow: fireCountdown.fireRow,
+    });
+  }, [fireCountdown, fireResult]);
 
   const portfolioCagr = useMemo(() => {
     if (dates.length < 2 || !latestDate) return null;
@@ -148,9 +229,9 @@ export default function Dashboard() {
 
       {/* FIRE metrics */}
       {fireConfig && (
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
           {fireProgress && (
-            <div className="card p-5 animate-in stagger-5">
+            <div className="card p-5 animate-in stagger-5 col-span-2 sm:col-span-1">
               <div className="flex items-center justify-between mb-3">
                 <p className="text-[0.7rem] font-medium uppercase tracking-wider" style={{ color: 'var(--text-tertiary)' }}>
                   FIRE Progress
@@ -171,22 +252,56 @@ export default function Dashboard() {
             </div>
           )}
 
-          {yearsToFire !== null && (
-            <div className="card p-5 animate-in stagger-6">
-              <p className="text-[0.7rem] font-medium uppercase tracking-wider mb-2" style={{ color: 'var(--text-tertiary)' }}>
-                Years to FIRE
-              </p>
-              <p className="font-mono text-2xl font-bold" style={{ color: 'var(--teal-bright)' }}>
-                {yearsToFire === 0 ? 'Achieved' : yearsToFire}
-              </p>
-              <p className="text-[0.65rem] mt-1" style={{ color: 'var(--text-muted)' }}>
-                At {Math.min(...fireConfig.withdrawalRates)}% withdrawal rate
-              </p>
-            </div>
+          {fireCountdown !== null && (
+            <>
+              <div className="card p-5 animate-in stagger-6">
+                <p className="text-[0.7rem] font-medium uppercase tracking-wider mb-2" style={{ color: 'var(--text-tertiary)' }}>
+                  Years to FIRE
+                </p>
+                <p className="font-mono text-2xl font-bold" style={{ color: 'var(--teal-bright)' }}>
+                  {fireCountdown.years === 0 ? 'Achieved' : fireCountdown.years}
+                </p>
+                <p className="text-[0.65rem] mt-1" style={{ color: 'var(--text-muted)' }}>
+                  At {Math.min(...fireConfig.withdrawalRates)}% withdrawal rate
+                </p>
+              </div>
+
+              <div className="card p-5 animate-in stagger-7">
+                <p className="text-[0.7rem] font-medium uppercase tracking-wider mb-2" style={{ color: 'var(--text-tertiary)' }}>
+                  Days to FIRE
+                </p>
+                <p className="font-mono text-2xl font-bold" style={{ color: 'var(--teal-bright)' }}>
+                  {fireCountdown.days === 0 ? 'Achieved' : fireCountdown.days.toLocaleString()}
+                </p>
+                <p className="text-[0.65rem] mt-1" style={{ color: 'var(--text-muted)' }}>
+                  Calendar days remaining
+                </p>
+              </div>
+
+              <div className="card p-5 animate-in stagger-8">
+                <p className="text-[0.7rem] font-medium uppercase tracking-wider mb-2" style={{ color: 'var(--text-tertiary)' }}>
+                  Work Days to FIRE
+                </p>
+                <p className="font-mono text-2xl font-bold" style={{ color: '#f59e0b' }}>
+                  {fireCountdown.workDays === 0 ? 'Achieved' : fireCountdown.workDays.toLocaleString()}
+                </p>
+                <p
+                  className="text-[0.65rem] mt-1"
+                  style={{ color: 'var(--text-muted)' }}
+                  title={latestDate ? `Projected from snapshot ${formatDate(latestDate)}` : undefined}
+                >
+                  {fireCountdown.bindingConstraint === 'bridge-check'
+                    ? 'Limited by bridge to pension age'
+                    : fireCountdown.bindingConstraint === 'pot-threshold'
+                    ? 'Limited by pot threshold'
+                    : 'Excl. weekends, holidays & leave'}
+                </p>
+              </div>
+            </>
           )}
 
           {portfolioCagr !== null && (
-            <div className="card p-5 animate-in stagger-7">
+            <div className="card p-5 animate-in stagger-9">
               <p className="text-[0.7rem] font-medium uppercase tracking-wider mb-2" style={{ color: 'var(--text-tertiary)' }}>
                 Portfolio CAGR
               </p>
@@ -198,6 +313,43 @@ export default function Dashboard() {
               </p>
             </div>
           )}
+        </div>
+      )}
+
+      {DEBUG_FIRE && fireCountdown && fireResult && fireConfig && (
+        <div className="card p-5" style={{ borderColor: '#f59e0b' }}>
+          <h3 className="font-display text-base font-semibold mb-3" style={{ color: '#f59e0b' }}>
+            FIRE Debug (add ?debug to URL)
+          </h3>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-xs font-mono" style={{ color: 'var(--text-secondary)' }}>
+            <div>
+              <div><b>Binding constraint:</b> {fireCountdown.bindingConstraint}</div>
+              <div><b>fd.age:</b> {fireCountdown.fdAge} (fireIndex {fireCountdown.fireIndex})</div>
+              <div><b>fractionalYears:</b> {fireCountdown.fractionalYears.toFixed(4)}</div>
+              <div><b>withdrawalRate:</b> {fireCountdown.lowestRate}%</div>
+              <div><b>weightedAccessibleGrowthRate:</b> {(fireResult.weightedAccessibleGrowthRate * 100).toFixed(3)}%</div>
+              <div><b>anchor (snapshot):</b> {fireCountdown.anchor.toISOString().slice(0, 10)}</div>
+              <div><b>today:</b> {new Date().toISOString().slice(0, 10)}</div>
+              <div><b>fireDate:</b> {fireCountdown.fireDate.toISOString().slice(0, 10)}</div>
+              <div><b>workDays:</b> {fireCountdown.workDays} | <b>days:</b> {fireCountdown.days}</div>
+            </div>
+            <div>
+              {fireCountdown.prevRow && (
+                <div className="mb-2">
+                  <div style={{ color: '#f59e0b' }}><b>prevRow (age {fireCountdown.prevRow.age}):</b></div>
+                  <div>total {formatPenceShort(fireCountdown.prevRow.total * 100)} | accessible {formatPenceShort(fireCountdown.prevRow.accessible * 100)}</div>
+                  <div>annualSpend {formatPenceShort(fireCountdown.prevRow.annualSpend * 100)} | sp {formatPenceShort(fireCountdown.prevRow.statePension * 100)} | db {formatPenceShort((fireCountdown.prevRow.definedBenefitIncome ?? 0) * 100)}</div>
+                </div>
+              )}
+              {fireCountdown.fireRow && (
+                <div>
+                  <div style={{ color: '#f59e0b' }}><b>fireRow (age {fireCountdown.fireRow.age}):</b></div>
+                  <div>total {formatPenceShort(fireCountdown.fireRow.total * 100)} | accessible {formatPenceShort(fireCountdown.fireRow.accessible * 100)}</div>
+                  <div>annualSpend {formatPenceShort(fireCountdown.fireRow.annualSpend * 100)} | sp {formatPenceShort(fireCountdown.fireRow.statePension * 100)} | db {formatPenceShort((fireCountdown.fireRow.definedBenefitIncome ?? 0) * 100)}</div>
+                </div>
+              )}
+            </div>
+          </div>
         </div>
       )}
 
