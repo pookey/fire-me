@@ -12,14 +12,13 @@ Includes a **Claude Code skill** (`/fire-advisor`) that acts as an interactive F
 - UK-specific: ISAs, SIPPs, LISAs, GIAs, state pension, pension access ages
 - Bridge stress testing (can your accessible savings survive until pension age?)
 - Income and expense tracking
-- CSV import for bulk historical data
 - Cognito authentication (single-user)
 
 ## Architecture
 
 Three independent packages (no monorepo tooling):
 
-- **`backend/`** — AWS Lambda function handlers (TypeScript, esbuild). Handlers for funds, snapshots, FIRE config, income/expenses, and CSV import. DynamoDB single-table design.
+- **`backend/`** — AWS Lambda function handlers (TypeScript, esbuild). Handlers for funds, snapshots, FIRE config, and income/expenses. DynamoDB single-table design.
 - **`frontend/`** — React 19 SPA with Vite, Tailwind CSS v4, Recharts. Auth via AWS Amplify/Cognito.
 - **`infrastructure/`** — AWS CDK (TypeScript). DynamoDB, Cognito, API Gateway HTTP API, Lambda, S3 + CloudFront with custom domain.
 
@@ -57,9 +56,9 @@ This will:
 4. Upload the frontend to S3 and invalidate CloudFront
 5. Create a Cognito user (on first deploy)
 
-### 3. Import your data (optional)
+### 3. Add your data
 
-See [CSV Import](#csv-import) below.
+Sign in with the Cognito user created on first deploy and enter your funds and snapshots through the web UI.
 
 ## Commands
 
@@ -100,50 +99,6 @@ The standout feature of this project is the Claude Code skill at `.claude/skills
 The advisor is UK-focused and understands ISAs, SIPPs, LISAs, GIAs, UK tax bands, state pension, and pension access ages.
 
 To use it, open Claude Code in this repo and type `/fire-advisor`.
-
-## CSV Import
-
-The CSV import script (`scripts/csv-import.ts`) is designed to bulk-load historical fund data from a spreadsheet export. **It is built around a specific CSV format and will need to be modified for your own data.**
-
-### Expected CSV format
-
-- **Row 1**: Headers — first column is a label, remaining columns are dates in `Mon-YY` format (e.g. `Nov-18`, `Dec-18`) or `M/D/YY` format (e.g. `4/1/26`)
-- **Rows 2-5**: Metadata rows (skipped by the importer)
-- **Rows 6-18**: Fund data — one row per fund, values in GBP with `£` prefix (e.g. `£38,311.65`, `-£1,120.72`, `£-` for zero)
-- **Rows 19+**: Summary rows (skipped)
-
-### Fund definitions
-
-The script has a hardcoded `FUND_DEFINITIONS` array that maps specific CSV row indices to fund records with names, categories, subcategories, and tax wrappers. The included definitions are examples — you'll need to edit this array to match your own funds.
-
-### Adapting for your data
-
-The simplest approach is to ask Claude to help you:
-
-1. Show Claude your CSV file (or describe its structure)
-2. Ask Claude to modify `scripts/csv-import.ts` to match your format
-3. The key things to change are:
-   - `FUND_DEFINITIONS` — your fund names, categories, and row indices
-   - Row indices if your metadata rows differ
-   - Date format parsing if yours is different
-   - Value parsing if your currency format differs
-
-Alternatively, you can skip the CSV import entirely and enter data manually through the web UI.
-
-### Running the import
-
-```bash
-export AWS_PROFILE=your-profile
-export CSV_PATH=../path-to-your-data.csv
-cd scripts && npm ci && npm run import
-```
-
-It's safe to wipe all data and re-import at any time:
-
-```bash
-cd scripts && bash clear-table.sh   # deletes all items from DynamoDB
-npm run import                       # re-import from CSV
-```
 
 ## DynamoDB Schema
 
