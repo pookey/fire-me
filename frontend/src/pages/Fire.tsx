@@ -10,7 +10,7 @@ import WrapperDrawdownChart from '../components/charts/WrapperDrawdownChart';
 import ProjectionTable from '../components/charts/ProjectionTable';
 import StressTestPanel from '../components/charts/StressTestPanel';
 import { runStressTest, DEFAULT_STRESS_SCENARIOS } from '../utils/stressTestCalculator';
-import type { Fund, Snapshot, FireConfig, FireResult, FireScenario, LumpSum, TaxConfig, StressScenarioConfig } from '../types';
+import type { Fund, Snapshot, FireConfig, FireResult, FireScenario, TaxConfig, StressScenarioConfig } from '../types';
 
 const SCENARIO_COLORS = ['#f97316', '#14b8a6', '#ec4899', '#84cc16', '#a855f7'];
 
@@ -26,18 +26,8 @@ const defaultConfig: FireConfig = {
   statePensionAge: 68,
   withdrawalRates: [3, 3.5, 4],
   dateOfBirth: '1990-01-01',
-  lumpSums: [],
   lifeExpectancy: 100,
   showRealTerms: false,
-};
-
-const emptyLumpSum: LumpSum = {
-  type: 'inflow',
-  category: 'savings',
-  subcategory: 'equities',
-  amount: 0,
-  age: 40,
-  description: '',
 };
 
 export default function Fire() {
@@ -208,19 +198,6 @@ export default function Fire() {
       ...prev,
       growthRates: { ...prev.growthRates, [key]: value },
     }));
-  };
-
-  const lumpSums = config.lumpSums ?? [];
-  const addLumpSum = () => {
-    updateConfig({ lumpSums: [...lumpSums, { ...emptyLumpSum }] });
-  };
-  const removeLumpSum = (index: number) => {
-    updateConfig({ lumpSums: lumpSums.filter((_, i) => i !== index) });
-  };
-  const updateLumpSum = (index: number, updates: Partial<LumpSum>) => {
-    updateConfig({
-      lumpSums: lumpSums.map((l, i) => (i === index ? { ...l, ...updates } : l)),
-    });
   };
 
   const toggleSection = (section: string) => {
@@ -779,59 +756,6 @@ export default function Fire() {
             })}
           </div>
 
-          {/* Lump Sums */}
-          <div className="space-y-3 pt-3">
-            <div className="flex items-center justify-between">
-              <label className="block text-[0.65rem] font-medium uppercase tracking-wider" style={{ color: 'var(--text-tertiary)' }}>Lump Sums</label>
-              <button onClick={addLumpSum} className="text-[0.65rem] font-medium" style={{ color: 'var(--gold)' }}>+ Add</button>
-            </div>
-
-            {lumpSums.length === 0 && (
-              <p className="text-[0.65rem]" style={{ color: 'var(--text-muted)' }}>No lump sums configured.</p>
-            )}
-
-            {lumpSums.map((ls, i) => (
-              <div key={i} className="rounded-lg p-3 space-y-2" style={{ background: 'var(--surface-1)', border: '1px solid var(--border-subtle)' }}>
-                <div className="flex items-center justify-between">
-                  <span className="text-[0.65rem] font-medium" style={{ color: 'var(--text-muted)' }}>Lump Sum {i + 1}</span>
-                  <button onClick={() => removeLumpSum(i)} className="btn-danger text-[0.65rem]">Remove</button>
-                </div>
-                <Field label="Description">
-                  <input type="text" value={ls.description} onChange={e => updateLumpSum(i, { description: e.target.value })} placeholder="e.g. Inheritance" className="input-dark" />
-                </Field>
-                <div className="grid grid-cols-2 gap-2">
-                  <Field label="Type">
-                    <select value={ls.type} onChange={e => updateLumpSum(i, { type: e.target.value as LumpSum['type'] })} className="input-dark">
-                      <option value="inflow">Inflow</option>
-                      <option value="outflow">Outflow</option>
-                    </select>
-                  </Field>
-                  <Field label="Age">
-                    <input type="number" value={ls.age} onChange={e => updateLumpSum(i, { age: Number(e.target.value) })} className="input-dark font-mono" />
-                  </Field>
-                </div>
-                <div className="grid grid-cols-2 gap-2">
-                  <Field label="Category">
-                    <select value={ls.category} onChange={e => updateLumpSum(i, { category: e.target.value as LumpSum['category'] })} className="input-dark">
-                      <option value="savings">Savings</option>
-                      <option value="pension">Pension</option>
-                    </select>
-                  </Field>
-                  <Field label="Asset class">
-                    <select value={ls.subcategory} onChange={e => updateLumpSum(i, { subcategory: e.target.value as LumpSum['subcategory'] })} className="input-dark">
-                      <option value="equities">Equities</option>
-                      <option value="bonds">Bonds</option>
-                      <option value="cash">Cash</option>
-                      <option value="property">Property</option>
-                    </select>
-                  </Field>
-                </div>
-                <Field label="Amount (£)">
-                  <input type="number" value={ls.amount} onChange={e => updateLumpSum(i, { amount: Number(e.target.value) })} className="input-dark font-mono" />
-                </Field>
-              </div>
-            ))}
-          </div>
         </ConfigSection>
 
         {/* Scenarios */}

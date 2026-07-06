@@ -42,8 +42,10 @@ export const handler: APIGatewayProxyHandlerV2 = async (event) => {
       if (body.description !== undefined) item.description = body.description;
       if (body.drawdownAge !== undefined) item.drawdownAge = body.drawdownAge;
       if (body.monthlyContribution !== undefined) item.monthlyContribution = body.monthlyContribution;
+      if (body.contributionStartDate !== undefined) item.contributionStartDate = body.contributionStartDate;
       if (body.contributionEndAge !== undefined) item.contributionEndAge = body.contributionEndAge;
       if (body.take25PctLumpSum !== undefined) item.take25PctLumpSum = body.take25PctLumpSum;
+      if (body.lumpSums !== undefined) item.lumpSums = body.lumpSums;
 
       await docClient.send(
         new PutCommand({
@@ -66,7 +68,7 @@ export const handler: APIGatewayProxyHandlerV2 = async (event) => {
       const expressionValues: Record<string, unknown> = {};
       const expressionNames: Record<string, string> = {};
 
-      const updatableFields = ["name", "description", "category", "subcategory", "wrapper", "active", "sortOrder", "drawdownAge", "monthlyContribution", "contributionEndAge", "take25PctLumpSum"];
+      const updatableFields = ["name", "description", "category", "subcategory", "wrapper", "active", "sortOrder", "drawdownAge", "monthlyContribution", "contributionStartDate", "contributionEndAge", "take25PctLumpSum", "lumpSums"];
       for (const field of updatableFields) {
         if (body[field] !== undefined) {
           expressionParts.push(`#${field} = :${field}`);

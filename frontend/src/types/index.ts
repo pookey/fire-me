@@ -11,8 +11,10 @@ export interface Fund {
   sortOrder: number;
   drawdownAge?: number;
   monthlyContribution?: number;
+  contributionStartDate?: string; // 'YYYY-MM' — first month contributions are made; absent = start now
   contributionEndAge?: number;
   take25PctLumpSum?: boolean;
+  lumpSums?: LumpSum[];
 }
 
 export interface Snapshot {
@@ -25,11 +27,10 @@ export interface Snapshot {
 
 export interface LumpSum {
   type: 'inflow' | 'outflow';
-  category: 'savings' | 'pension';
-  subcategory: 'equities' | 'bonds' | 'cash' | 'property';
   amount: number;
-  age: number;
+  date: string; // 'YYYY-MM'
   description: string;
+  active?: boolean; // undefined = active (backwards-compatible)
 }
 
 export interface TaxConfig {
@@ -83,7 +84,6 @@ export interface FireConfig {
   statePensionAge: number;
   withdrawalRates: number[];
   dateOfBirth: string;
-  lumpSums?: LumpSum[];
   lifeExpectancy?: number;
   showRealTerms?: boolean;
   drawdownOrder?: TaxWrapper[];

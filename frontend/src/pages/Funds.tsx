@@ -1,6 +1,9 @@
 import { useEffect, useState } from 'react';
+import { Link } from 'react-router-dom';
 import { getFunds, createFund, updateFund } from '../utils/api';
 import type { Fund, TaxWrapper } from '../types';
+import MonthYearPicker from '../components/MonthYearPicker';
+import { formatStartDate, isFutureMonth } from '../utils/dateHelpers';
 
 type FundForm = Omit<Fund, 'id'>;
 
@@ -14,8 +17,10 @@ const emptyForm: FundForm = {
   sortOrder: 0,
   drawdownAge: undefined,
   monthlyContribution: undefined,
+  contributionStartDate: undefined,
   contributionEndAge: undefined,
   take25PctLumpSum: undefined,
+  lumpSums: undefined,
 };
 
 export default function Funds() {
@@ -59,8 +64,10 @@ export default function Funds() {
       sortOrder: fund.sortOrder,
       drawdownAge: fund.drawdownAge,
       monthlyContribution: fund.monthlyContribution,
+      contributionStartDate: fund.contributionStartDate,
       contributionEndAge: fund.contributionEndAge,
       take25PctLumpSum: fund.take25PctLumpSum,
+      lumpSums: fund.lumpSums,
     });
     setEditingId(fund.id);
     setShowForm(true);
@@ -105,7 +112,12 @@ export default function Funds() {
     <div className="space-y-6 max-w-6xl">
       <div className="flex items-center justify-between animate-in">
         <h2 className="font-display text-2xl font-semibold" style={{ color: 'var(--text-primary)' }}>Funds</h2>
-        <button onClick={handleAdd} className="btn-gold">Add Fund</button>
+        <div className="flex items-center gap-4">
+          <Link to="/lump-sums" className="text-sm font-medium" style={{ color: 'var(--gold)' }}>
+            Manage Lump Sums →
+          </Link>
+          <button onClick={handleAdd} className="btn-gold">Add Fund</button>
+        </div>
       </div>
 
       {error && (
@@ -204,7 +216,7 @@ export default function Funds() {
             {/* Projections */}
             <div className="pt-4 mt-2" style={{ borderTop: '1px solid var(--border-subtle)' }}>
               <h4 className="text-xs font-semibold uppercase tracking-wider mb-3" style={{ color: 'var(--text-tertiary)' }}>Projections</h4>
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
                 <div>
                   <label className="block text-xs font-medium mb-1.5" style={{ color: 'var(--text-tertiary)' }}>Drawdown Age</label>
                   <input
@@ -223,6 +235,13 @@ export default function Funds() {
                     onChange={e => setForm(prev => ({ ...prev, monthlyContribution: e.target.value ? Number(e.target.value) : undefined }))}
                     placeholder="None"
                     className="input-dark font-mono"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-medium mb-1.5" style={{ color: 'var(--text-tertiary)' }}>Contribution Start</label>
+                  <MonthYearPicker
+                    value={form.contributionStartDate}
+                    onChange={v => setForm(prev => ({ ...prev, contributionStartDate: v }))}
                   />
                 </div>
                 <div>
@@ -295,7 +314,9 @@ export default function Funds() {
                   <td className="capitalize">{fund.subcategory}</td>
                   <td className="uppercase">{fund.wrapper ?? '-'}</td>
                   <td className="td-mono">
-                    {fund.monthlyContribution ? `£${fund.monthlyContribution}/mo` : '—'}
+                    {fund.monthlyContribution
+                      ? `£${fund.monthlyContribution}/mo${fund.contributionStartDate && isFutureMonth(fund.contributionStartDate) ? ` (from ${formatStartDate(fund.contributionStartDate)})` : ''}`
+                      : '—'}
                   </td>
                   <td>{fund.drawdownAge ? `Age ${fund.drawdownAge}` : 'Default'}</td>
                   <td>{fund.sortOrder}</td>

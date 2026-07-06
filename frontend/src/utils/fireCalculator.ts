@@ -1,4 +1,4 @@
-import type { Fund, Snapshot, FireConfig, FireProjection, FireResult, TaxConfig, TaxWrapper } from '../types';
+import type { Fund, Snapshot, FireConfig, FireProjection, FireResult, LumpSum, TaxConfig, TaxWrapper } from '../types';
 
 export type FireBindingConstraint = 'pot-threshold' | 'bridge-check' | 'none';
 
@@ -31,9 +31,33 @@ interface FundBalance {
   subcategory: keyof Bucket;
   drawdownAge: number;
   monthlyContribution: number;
+  /** Fractional age at which contributions start. Pre-computed from Fund.contributionStartDate; defaults to currentAge (i.e. now). */
+  contributionStartAge: number;
   contributionEndAge: number;
   take25PctLumpSum: boolean;
+  lumpSums: LumpSum[];
   balance: number;
+}
+
+/** Convert an optional 'YYYY-MM' start date to a fractional age, anchored to Jan 1 of currentYear. */
+function resolveContributionStartAge(
+  dateStr: string | undefined,
+  currentYear: number,
+  currentAge: number
+): number {
+  if (!dateStr) return currentAge;
+  const [y, m] = dateStr.split('-').map(Number);
+  if (!y || !m) return currentAge;
+  const monthsFromYearStart = (y - currentYear) * 12 + (m - 1);
+  // Past dates clamp to currentAge — equivalent to "start contributing now".
+  return currentAge + Math.max(0, monthsFromYearStart) / 12;
+}
+
+/** Convert a 'YYYY-MM' lump-sum date to the integer projection age it falls in. */
+function resolveLumpSumAge(dateStr: string, currentYear: number, currentAge: number): number {
+  const [y] = dateStr.split('-').map(Number);
+  if (!y) return -1;
+  return currentAge + (y - currentYear);
 }
 
 const DEFAULT_TAX_CONFIG: TaxConfig = {
@@ -256,7 +280,6 @@ export function calculateFireProjections(
   const currentYear = new Date().getFullYear();
   const currentAge = currentYear - birthDate.getFullYear();
   const endAge = config.lifeExpectancy ?? 100;
-  const lumpSums = config.lumpSums ?? [];
   const showRealTerms = config.showRealTerms ?? false;
   const taxConfig = config.taxConfig ?? DEFAULT_TAX_CONFIG;
   const drawdownOrder = config.drawdownOrder ?? DEFAULT_DRAWDOWN_ORDER;
@@ -282,8 +305,10 @@ export function calculateFireProjections(
       subcategory: fund.subcategory,
       drawdownAge: fund.drawdownAge ?? (isSipp ? config.pensionAccessAge : isLisa ? 60 : currentAge),
       monthlyContribution: fund.monthlyContribution ?? 0,
+      contributionStartAge: resolveContributionStartAge(fund.contributionStartDate, currentYear, currentAge),
       contributionEndAge: fund.contributionEndAge ?? endAge,
       take25PctLumpSum: fund.take25PctLumpSum ?? false,
+      lumpSums: fund.lumpSums ?? [],
       balance: snapshot.value,
     });
   }
@@ -307,53 +332,34 @@ export function calculateFireProjections(
     const inflationMultiplier = Math.pow(1 + config.inflationRate / 100, yearsFromNow);
     const annualSpend = config.targetAnnualSpend * inflationMultiplier;
 
-    // Apply per-fund contributions (stop at targetRetirementAge if set)
+    // Apply per-fund contributions (stop at targetRetirementAge if set).
+    // The first projection year that straddles a fund's contributionStartDate is
+    // prorated by the number of months remaining in that year.
     const contributionCutoffAge = config.targetRetirementAge
       ? Math.min(config.targetRetirementAge, endAge)
       : endAge;
     let yearContributions = 0;
     for (const fb of fundBalances) {
-      if (fb.monthlyContribution > 0 && age <= fb.contributionEndAge && age < contributionCutoffAge) {
-        const annualAmount = fb.monthlyContribution * 12;
-        fb.balance += annualAmount;
-        yearContributions += annualAmount;
-      }
+      if (!(fb.monthlyContribution > 0)) continue;
+      if (age > fb.contributionEndAge) continue;
+      if (age >= contributionCutoffAge) continue;
+      // Months of [age, age+1) on/after contributionStartAge, clamped to [0, 12].
+      const monthsActive = Math.max(0, Math.min(12, (age + 1 - fb.contributionStartAge) * 12));
+      if (monthsActive <= 0) continue;
+      const amount = fb.monthlyContribution * monthsActive;
+      fb.balance += amount;
+      yearContributions += amount;
     }
 
-    // Apply lump sums at the specified age (matched to funds by category+subcategory, proportionally)
-    for (const lumpSum of lumpSums) {
-      if (lumpSum.age !== age) continue;
-
-      // Find matching funds by wrapper mapping: pension->sipp, savings->gia/isa/none
-      const matchingFunds = fundBalances.filter(fb => {
-        const wrapperMatchesPension = lumpSum.category === 'pension' && fb.wrapper === 'sipp';
-        const wrapperMatchesSavings = lumpSum.category === 'savings' && fb.wrapper !== 'sipp';
-        return (wrapperMatchesPension || wrapperMatchesSavings) && fb.subcategory === lumpSum.subcategory;
-      });
-
-      if (matchingFunds.length === 0) continue;
-
-      if (lumpSum.type === 'inflow') {
-        // Distribute proportionally, or equally if all zero
-        const totalBalance = matchingFunds.reduce((sum, fb) => sum + fb.balance, 0);
-        if (totalBalance > 0) {
-          for (const fb of matchingFunds) {
-            fb.balance += lumpSum.amount * (fb.balance / totalBalance);
-          }
+    // Apply per-fund lump sums whose date falls in this projection year
+    for (const fb of fundBalances) {
+      for (const ls of fb.lumpSums) {
+        if (ls.active === false) continue;
+        if (resolveLumpSumAge(ls.date, currentYear, currentAge) !== age) continue;
+        if (ls.type === 'inflow') {
+          fb.balance += ls.amount;
         } else {
-          const share = lumpSum.amount / matchingFunds.length;
-          for (const fb of matchingFunds) {
-            fb.balance += share;
-          }
-        }
-      } else {
-        // Outflow: subtract proportionally
-        const totalBalance = matchingFunds.reduce((sum, fb) => sum + fb.balance, 0);
-        if (totalBalance > 0) {
-          const subtract = Math.min(lumpSum.amount, totalBalance);
-          for (const fb of matchingFunds) {
-            fb.balance = Math.max(0, fb.balance - subtract * (fb.balance / totalBalance));
-          }
+          fb.balance = Math.max(0, fb.balance - ls.amount);
         }
       }
     }
@@ -374,8 +380,10 @@ export function calculateFireProjections(
               subcategory: 'cash',
               drawdownAge: currentAge,
               monthlyContribution: 0,
+              contributionStartAge: currentAge,
               contributionEndAge: endAge,
               take25PctLumpSum: false,
+              lumpSums: [],
               balance: 0,
             };
             fundBalances.push(isaCash);

@@ -541,6 +541,77 @@ describe('fireCalculator', () => {
       expect(result.projections[0].accessible).toBe(106000);
       expect(result.projections[0].contributions).toBe(6000);
     });
+
+    // System time is 2026-01-01, DOB 1990-01-01 → currentAge 36, currentYear 2026.
+    it('prorates the first year when contributionStartDate is mid-year', () => {
+      const funds = [makeFund({
+        subcategory: 'equities',
+        monthlyContribution: 1000,
+        contributionStartDate: '2026-07', // 6 months in
+      })];
+      const snapshots = [makeSnapshot({ value: 100000 })];
+      const config = makeConfig({
+        growthRates: { equities: 0, bonds: 0, cash: 0, property: 0 },
+      });
+      const result = calculateFireProjections(funds, snapshots, config);
+
+      // Year 0: 6 months × £1000 = £6000
+      expect(result.projections[0].contributions).toBe(6000);
+      expect(result.projections[0].accessible).toBe(106000);
+      // Year 1: full 12 months
+      expect(result.projections[1].contributions).toBe(12000);
+      expect(result.projections[1].accessible).toBe(118000);
+    });
+
+    it('treats a past contributionStartDate the same as no start date', () => {
+      const funds = [makeFund({
+        subcategory: 'equities',
+        monthlyContribution: 1000,
+        contributionStartDate: '2025-01', // before currentYear
+      })];
+      const snapshots = [makeSnapshot({ value: 100000 })];
+      const config = makeConfig({
+        growthRates: { equities: 0, bonds: 0, cash: 0, property: 0 },
+      });
+      const result = calculateFireProjections(funds, snapshots, config);
+
+      expect(result.projections[0].contributions).toBe(12000);
+      expect(result.projections[0].accessible).toBe(112000);
+    });
+
+    it('contributes zero when contributionStartDate is after contributionEndAge', () => {
+      const funds = [makeFund({
+        subcategory: 'equities',
+        monthlyContribution: 1000,
+        contributionStartDate: '2031-01', // age 41
+        contributionEndAge: 38,
+      })];
+      const snapshots = [makeSnapshot({ value: 100000 })];
+      const config = makeConfig({
+        growthRates: { equities: 0, bonds: 0, cash: 0, property: 0 },
+      });
+      const result = calculateFireProjections(funds, snapshots, config);
+
+      const totalContributions = result.projections.reduce((s, p) => s + (p.contributions ?? 0), 0);
+      expect(totalContributions).toBe(0);
+    });
+
+    it('contributes zero when contributionStartDate is after targetRetirementAge', () => {
+      const funds = [makeFund({
+        subcategory: 'equities',
+        monthlyContribution: 1000,
+        contributionStartDate: '2031-01', // age 41
+      })];
+      const snapshots = [makeSnapshot({ value: 100000 })];
+      const config = makeConfig({
+        growthRates: { equities: 0, bonds: 0, cash: 0, property: 0 },
+      });
+      config.targetRetirementAge = 38;
+      const result = calculateFireProjections(funds, snapshots, config);
+
+      const totalContributions = result.projections.reduce((s, p) => s + (p.contributions ?? 0), 0);
+      expect(totalContributions).toBe(0);
+    });
   });
 
   describe('per-fund drawdown age', () => {
@@ -614,14 +685,14 @@ describe('fireCalculator', () => {
   });
 
   describe('lump sums', () => {
-    it('applies an inflow lump sum at the specified age', () => {
-      const funds = [makeFund({ subcategory: 'equities' })];
+    it('applies an inflow lump sum in the year of the specified date', () => {
+      const funds = [makeFund({
+        subcategory: 'equities',
+        lumpSums: [{ type: 'inflow', amount: 50000, date: '2028-06', description: 'Inheritance' }],
+      })];
       const snapshots = [makeSnapshot({ value: 100000 })];
       const config = makeConfig({
         growthRates: { equities: 0, bonds: 0, cash: 0, property: 0 },
-        lumpSums: [
-          { type: 'inflow', category: 'savings', subcategory: 'equities', amount: 50000, age: 38, description: 'Inheritance' },
-        ],
       });
       const result = calculateFireProjections(funds, snapshots, config);
 
@@ -631,14 +702,14 @@ describe('fireCalculator', () => {
       expect(result.projections[3].accessible).toBe(150000);
     });
 
-    it('applies an outflow lump sum at the specified age', () => {
-      const funds = [makeFund({ subcategory: 'equities' })];
+    it('applies an outflow lump sum in the year of the specified date', () => {
+      const funds = [makeFund({
+        subcategory: 'equities',
+        lumpSums: [{ type: 'outflow', amount: 30000, date: '2027-03', description: 'Car purchase' }],
+      })];
       const snapshots = [makeSnapshot({ value: 100000 })];
       const config = makeConfig({
         growthRates: { equities: 0, bonds: 0, cash: 0, property: 0 },
-        lumpSums: [
-          { type: 'outflow', category: 'savings', subcategory: 'equities', amount: 30000, age: 37, description: 'Car purchase' },
-        ],
       });
       const result = calculateFireProjections(funds, snapshots, config);
 
@@ -647,18 +718,43 @@ describe('fireCalculator', () => {
     });
 
     it('applies lump sum to pension (locked) bucket', () => {
-      const funds = [makeFund({ category: 'pension', subcategory: 'equities' })];
+      const funds = [makeFund({
+        category: 'pension',
+        subcategory: 'equities',
+        lumpSums: [{ type: 'inflow', amount: 20000, date: '2026-01', description: 'Pension transfer' }],
+      })];
       const snapshots = [makeSnapshot({ value: 50000 })];
       const config = makeConfig({
         growthRates: { equities: 0, bonds: 0, cash: 0, property: 0 },
-        lumpSums: [
-          { type: 'inflow', category: 'pension', subcategory: 'equities', amount: 20000, age: 36, description: 'Pension transfer' },
-        ],
       });
       const result = calculateFireProjections(funds, snapshots, config);
 
       expect(result.projections[0].locked).toBe(70000);
       expect(result.projections[0].accessible).toBe(0);
+    });
+
+    it('only affects the fund the lump sum is attached to', () => {
+      const funds = [
+        makeFund({
+          id: 'a',
+          subcategory: 'equities',
+          lumpSums: [{ type: 'inflow', amount: 40000, date: '2027-01', description: 'Targeted inflow' }],
+        }),
+        makeFund({ id: 'b', subcategory: 'equities' }),
+      ];
+      const snapshots = [
+        makeSnapshot({ fundId: 'a', value: 100000 }),
+        makeSnapshot({ fundId: 'b', value: 100000 }),
+      ];
+      const config = makeConfig({
+        growthRates: { equities: 0, bonds: 0, cash: 0, property: 0 },
+      });
+      const result = calculateFireProjections(funds, snapshots, config);
+
+      // Year 0 (2026): both at £100k → total £200k
+      expect(result.projections[0].accessible).toBe(200000);
+      // Year 1 (2027): only fund A gets +£40k → total £240k (NOT £220k that a 50/50 split would give)
+      expect(result.projections[1].accessible).toBe(240000);
     });
   });
 
