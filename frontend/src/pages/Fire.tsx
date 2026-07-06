@@ -14,6 +14,21 @@ import type { Fund, Snapshot, FireConfig, FireResult, FireScenario, TaxConfig, S
 
 const SCENARIO_COLORS = ['#f97316', '#14b8a6', '#ec4899', '#84cc16', '#a855f7'];
 
+// One-click market presets applied as deltas (percentage points) to the
+// current config. Ephemeral: never persisted with saved scenarios.
+const MARKET_PRESETS = [
+  {
+    id: 'preset_pessimistic',
+    name: 'Pessimistic',
+    deltas: { equities: -2.5, bonds: -1, cash: -0.5, property: -1.5, inflation: 1 },
+  },
+  {
+    id: 'preset_optimistic',
+    name: 'Optimistic',
+    deltas: { equities: 1.5, bonds: 0.5, cash: 0.5, property: 1, inflation: -0.5 },
+  },
+] as const;
+
 const TABS = ['Projection', 'Cash Flow', 'Accounts', 'Stress Test', 'Analysis'] as const;
 type Tab = typeof TABS[number];
 
@@ -46,6 +61,7 @@ export default function Fire() {
   const [scenarioName, setScenarioName] = useState('');
   const [savingScenario, setSavingScenario] = useState(false);
   const [stressScenarios, setStressScenarios] = useState<StressScenarioConfig[]>(DEFAULT_STRESS_SCENARIOS);
+  const [activePresets, setActivePresets] = useState<string[]>([]);
 
   useEffect(() => {
     loadData();
@@ -70,15 +86,57 @@ export default function Fire() {
     }
   }, [funds, latestSnapshotsInPounds, config]);
 
+  const presetScenarios = useMemo<FireScenario[]>(() =>
+    MARKET_PRESETS
+      .filter(p => activePresets.includes(p.id))
+      .map(p => ({
+        id: p.id,
+        name: p.name,
+        config: {
+          ...config,
+          growthRates: {
+            equities: config.growthRates.equities + p.deltas.equities,
+            bonds: config.growthRates.bonds + p.deltas.bonds,
+            cash: config.growthRates.cash + p.deltas.cash,
+            property: config.growthRates.property + p.deltas.property,
+          },
+          inflationRate: config.inflationRate + p.deltas.inflation,
+        },
+      })),
+    [activePresets, config]);
+
   const scenarioResults = useMemo(() => {
     if (funds.length === 0 || latestSnapshotsInPounds.length === 0) return [];
-    return scenarios
-      .filter(s => selectedScenarioIds.includes(s.id))
-      .map(s => ({
-        scenario: s,
-        result: calculateFireProjections(funds, latestSnapshotsInPounds, s.config, { skipCoast: true }),
-      }));
-  }, [funds, latestSnapshotsInPounds, scenarios, selectedScenarioIds]);
+    const selected = scenarios.filter(s => selectedScenarioIds.includes(s.id));
+    return [...selected, ...presetScenarios].map(s => ({
+      scenario: s,
+      result: calculateFireProjections(funds, latestSnapshotsInPounds, s.config, { skipCoast: true }),
+    }));
+  }, [funds, latestSnapshotsInPounds, scenarios, selectedScenarioIds, presetScenarios]);
+
+  const overlayMode = scenarioResults.length > 0;
+
+  const spendingSensitivity = useMemo(() => {
+    if (funds.length === 0 || latestSnapshotsInPounds.length === 0 || !result) return [];
+    const deltas = [-10000, -5000, 0, 5000, 10000];
+    const baseAge = computeEarliestFireAge(result.fireDates);
+    return deltas
+      .filter(d => config.targetAnnualSpend + d > 0)
+      .map(delta => {
+        const spend = config.targetAnnualSpend + delta;
+        const fireAge = delta === 0
+          ? baseAge
+          : computeEarliestFireAge(
+              calculateFireProjections(
+                funds,
+                latestSnapshotsInPounds,
+                { ...config, targetAnnualSpend: spend },
+                { skipCoast: true }
+              ).fireDates
+            );
+        return { delta, spend, fireAge, deltaYears: fireAge !== null && baseAge !== null ? fireAge - baseAge : null };
+      });
+  }, [funds, latestSnapshotsInPounds, config, result]);
 
   const currentAge = useMemo(() => {
     const birthDate = new Date(config.dateOfBirth);
@@ -418,9 +476,32 @@ export default function Fire() {
         <div className="card p-5 animate-in">
           {activeTab === 'Projection' && (
             <>
-              <h3 className="font-display text-sm font-semibold mb-4" style={{ color: 'var(--text-primary)' }}>Projection</h3>
+              <div className="flex items-center justify-between mb-4">
+                <h3 className="font-display text-sm font-semibold" style={{ color: 'var(--text-primary)' }}>Projection</h3>
+                <div className="flex items-center gap-2">
+                  <span className="text-[0.65rem] uppercase tracking-wider" style={{ color: 'var(--text-muted)' }}>Markets:</span>
+                  {MARKET_PRESETS.map(p => {
+                    const active = activePresets.includes(p.id);
+                    return (
+                      <button
+                        key={p.id}
+                        onClick={() => setActivePresets(prev => active ? prev.filter(id => id !== p.id) : [...prev, p.id])}
+                        className="px-2.5 py-1 rounded-full text-[0.65rem] font-medium transition-colors"
+                        style={{
+                          background: active ? 'rgba(201, 162, 39, 0.15)' : 'var(--surface-3)',
+                          color: active ? 'var(--gold-bright)' : 'var(--text-tertiary)',
+                          border: `1px solid ${active ? 'var(--border-gold)' : 'var(--border-subtle)'}`,
+                        }}
+                        title={`Equities ${p.deltas.equities > 0 ? '+' : ''}${p.deltas.equities}pp, inflation ${p.deltas.inflation > 0 ? '+' : ''}${p.deltas.inflation}pp vs current config`}
+                      >
+                        {p.name}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
               <ResponsiveContainer width="100%" height={400}>
-                <LineChart data={selectedScenarioIds.length > 0 ? comparisonChartData : result.projections} margin={{ top: 5, right: 30, left: 20, bottom: 5 }}>
+                <LineChart data={overlayMode ? comparisonChartData : result.projections} margin={{ top: 5, right: 30, left: 20, bottom: 5 }}>
                   <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.04)" />
                   <XAxis dataKey="age" stroke="var(--text-muted)" label={{ value: 'Age', position: 'insideBottom', offset: -5, fill: 'var(--text-tertiary)' }} />
                   <YAxis tickFormatter={(v: number) => formatPoundsShort(v)} stroke="var(--text-muted)" />
@@ -431,25 +512,25 @@ export default function Fire() {
                     itemStyle={{ color: 'var(--text-primary)' }}
                   />
                   <Legend />
-                  {selectedScenarioIds.length > 0 && (
+                  {overlayMode && (
                     <Line type="monotone" dataKey="total" name="Current" stroke="var(--gold-bright)" strokeWidth={2} dot={false} />
                   )}
-                  {selectedScenarioIds.length > 0 && scenarioResults.map(({ scenario }, i) => (
+                  {overlayMode && scenarioResults.map(({ scenario }, i) => (
                     <Line key={scenario.id} type="monotone" dataKey={`scenario_${scenario.id}`} name={scenario.name} stroke={SCENARIO_COLORS[i % SCENARIO_COLORS.length]} strokeWidth={2} dot={false} />
                   ))}
-                  {selectedScenarioIds.length === 0 && (
+                  {!overlayMode && (
                     <Line type="monotone" dataKey="accessible" name="Accessible" stroke="var(--teal-bright)" strokeWidth={2} dot={false} />
                   )}
-                  {selectedScenarioIds.length === 0 && (
+                  {!overlayMode && (
                     <Line type="monotone" dataKey="locked" name="Locked (Pension)" stroke="#818cf8" strokeWidth={2} dot={false} />
                   )}
-                  {selectedScenarioIds.length === 0 && (
+                  {!overlayMode && (
                     <Line type="monotone" dataKey="total" name="Total" stroke="var(--gold-bright)" strokeWidth={2} dot={false} />
                   )}
-                  {selectedScenarioIds.length === 0 && config.showRealTerms && (
+                  {!overlayMode && config.showRealTerms && (
                     <Line type="monotone" dataKey="realTotal" name="Total (Real)" stroke="var(--gold)" strokeWidth={2} strokeDasharray="5 5" dot={false} />
                   )}
-                  {selectedScenarioIds.length === 0 && (
+                  {!overlayMode && (
                     <Line type="monotone" dataKey="annualSpend" name="Annual Spend" stroke="var(--negative)" strokeWidth={1} strokeDasharray="5 5" dot={false} />
                   )}
                   {result.fireDates.filter(fd => fd.age !== null).map(fd => (
@@ -526,6 +607,35 @@ export default function Fire() {
                       <td className="td-mono">{fd.withdrawalRate}%</td>
                       <td className="td-primary">{fd.age !== null ? fd.age : 'Not achievable'}</td>
                       <td>{fd.year !== null ? fd.year : '-'}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+
+              <h3 className="font-display text-sm font-semibold mb-4" style={{ color: 'var(--text-primary)' }}>Spending Sensitivity</h3>
+              <table className="table-dark mb-6">
+                <thead>
+                  <tr>
+                    <th>Annual Spend</th>
+                    <th>Earliest FIRE Age</th>
+                    <th>Δ Years</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {spendingSensitivity.map(row => (
+                    <tr key={row.delta} style={row.delta === 0 ? { background: 'rgba(201, 162, 39, 0.08)' } : undefined}>
+                      <td className="td-mono">
+                        {formatPoundsShort(row.spend)}
+                        {row.delta !== 0 && (
+                          <span className="ml-1" style={{ color: 'var(--text-muted)' }}>
+                            ({row.delta > 0 ? '+' : '−'}{formatPoundsShort(Math.abs(row.delta))})
+                          </span>
+                        )}
+                      </td>
+                      <td className="td-primary">{row.fireAge ?? 'Not achievable'}</td>
+                      <td style={{ color: row.deltaYears != null && row.deltaYears < 0 ? 'var(--teal-bright)' : row.deltaYears ? 'var(--negative)' : undefined }}>
+                        {row.deltaYears == null ? '—' : row.deltaYears === 0 ? 'baseline' : `${row.deltaYears > 0 ? '+' : ''}${row.deltaYears}`}
+                      </td>
                     </tr>
                   ))}
                 </tbody>
