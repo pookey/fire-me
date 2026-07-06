@@ -14,6 +14,8 @@ export interface SubYearFireInput {
   inflationRate: number;
   /** Weighted accessible growth rate as a decimal (e.g. 0.056). */
   weightedAccessibleGrowthRate: number;
+  /** Tax gross-up multiplier on net spend (e.g. 1.04 when ~4% of spend goes to tax). Default 1. */
+  grossUpFactor?: number;
 }
 
 export interface SubYearFireResult {
@@ -227,6 +229,7 @@ function aggregateByWrapper(fundBalances: FundBalance[]): Record<TaxWrapper, Buc
  */
 export function findSubYearFireFraction(input: SubYearFireInput): SubYearFireResult {
   const { prevRow, fireRow, withdrawalRate, pensionAccessAge, inflationRate, weightedAccessibleGrowthRate } = input;
+  const grossUp = input.grossUpFactor ?? 1;
   const lerp = (a: number, b: number, f: number) => a + (b - a) * f;
 
   const satisfiesAt = (f: number): { satisfied: boolean; binding: FireBindingConstraint } => {
@@ -237,9 +240,11 @@ export function findSubYearFireFraction(input: SubYearFireInput): SubYearFireRes
     const statePension = lerp(prevRow.statePension, fireRow.statePension, f);
     const dbIncome = lerp(prevRow.definedBenefitIncome ?? 0, fireRow.definedBenefitIncome ?? 0, f);
     const guaranteed = statePension + dbIncome;
-    const netSpend = annualSpend - guaranteed;
+    const netSpendBeforeTax = annualSpend - guaranteed;
 
-    if (netSpend <= 0) return { satisfied: true, binding: 'none' };
+    if (netSpendBeforeTax <= 0) return { satisfied: true, binding: 'none' };
+
+    const netSpend = netSpendBeforeTax * grossUp;
 
     const requiredPot = netSpend / (withdrawalRate / 100);
     const yearsToBridge = Math.max(0, pensionAccessAge - age);
@@ -613,46 +618,80 @@ export function calculateFireProjections(
     return { rows, stats };
   };
 
-  const { rows: projections } = runSimulation({ collectRows: true });
+  // Calculate FIRE dates for each withdrawal rate with full tax-aware
+  // simulations: retiring at candidate age X means contributions stop at X and
+  // drawdown starts at X. X qualifies for rate r iff (a) every bridge year
+  // before pension access is fully funded from accessible pots (the drawdown
+  // grosses up for income tax/CGT, so this is tax-exact), and (b) once the
+  // pension unlocks (or immediately, if X is past access age) the remaining
+  // accessible pot covers the tax-inclusive spend at withdrawal rate r.
+  const defaultContributionCutoff = config.targetRetirementAge
+    ? Math.min(config.targetRetirementAge, endAge)
+    : endAge;
+  const UNMET_TOLERANCE = 1; // £1/yr tolerated for float noise
 
-  // Calculate FIRE dates for each withdrawal rate.
-  // For each candidate age, check: (1) accessible >= requiredPot for long-term
-  // sustainability, and (2) simulate a bridge from candidate age to pension access
-  // to verify accessible funds don't deplete before SIPP unlocks.
-  const fireDates = config.withdrawalRates.map(rate => {
-    const projection = projections.find(p => {
-      const guaranteedIncome = p.statePension + (p.definedBenefitIncome ?? 0);
-      const netSpend = p.annualSpend - guaranteedIncome;
-      if (netSpend <= 0) return true;
-      const requiredPot = netSpend / (rate / 100);
+  // The "bridge" runs until every fund has unlocked (per-fund drawdownAge —
+  // pensionAccessAge for SIPPs, 60 for LISAs, now for everything else). A
+  // portfolio with nothing locked has no bridge: the classic SWR check applies
+  // at the candidate age itself.
+  const fullAccessAge = fundBalances.reduce((m, fb) => Math.max(m, fb.drawdownAge), currentAge);
 
-      const yearsToBridge = Math.max(0, config.pensionAccessAge - p.age);
-
-      if (yearsToBridge === 0) {
-        // Past pension access: everything is accessible, simple check
-        return p.accessible >= requiredPot;
-      }
-
-      // Before pension access: total pot must sustain long-term (SIPP unlocks later)
-      if (p.total < requiredPot) return false;
-
-      // Bridge check: can accessible funds cover spending until pension access?
-      let pot = p.accessible;
-      let spend = netSpend;
-      for (let y = 0; y < yearsToBridge; y++) {
-        pot -= spend;
-        if (pot <= 0) return false;
-        pot *= (1 + weightedAccessibleGrowthRate);
-        spend *= (1 + config.inflationRate / 100);
-      }
-      return true;
+  const fireDateByRate = new Map<number, { age: number; year: number; grossAnnualSpend: number }>();
+  for (let candidate = currentAge; candidate <= endAge; candidate++) {
+    if (fireDateByRate.size === config.withdrawalRates.length) break;
+    const { stats } = runSimulation({
+      contributionStopAge: Math.min(defaultContributionCutoff, candidate),
+      drawdownStartAge: candidate,
     });
+    const statAt = (a: number) => stats[a - currentAge];
 
+    // (a) Bridge: every year from candidate until full access is fully funded
+    let bridgeOk = true;
+    for (let a = candidate; a < Math.min(fullAccessAge, endAge + 1); a++) {
+      if (statAt(a).unmetSpend > UNMET_TOLERANCE) {
+        bridgeOk = false;
+        break;
+      }
+    }
+    if (!bridgeOk) continue;
+
+    // (b) Sustainability of the post-bridge pot, grossed up for tax
+    const checkAge = Math.min(Math.max(candidate, fullAccessAge), endAge);
+    const s = statAt(checkAge);
+    const grossSpend = s.netSpend + s.taxPaid;
+
+    for (const rate of config.withdrawalRates) {
+      if (fireDateByRate.has(rate)) continue;
+      if (s.netSpend <= 0 || s.accessible >= grossSpend / (rate / 100)) {
+        fireDateByRate.set(rate, {
+          age: candidate,
+          year: currentYear + (candidate - currentAge),
+          grossAnnualSpend: Math.round(Math.max(0, grossSpend)),
+        });
+      }
+    }
+  }
+
+  const fireDates = config.withdrawalRates.map(rate => {
+    const hit = fireDateByRate.get(rate);
     return {
       withdrawalRate: rate,
-      age: projection?.age ?? null,
-      year: projection?.year ?? null,
+      age: hit?.age ?? null,
+      year: hit?.year ?? null,
+      grossAnnualSpend: hit?.grossAnnualSpend ?? null,
     };
+  });
+
+  // Main projection rows: align the drawdown start with what the FIRE dates
+  // concluded — a set target age wins; otherwise drawdown begins at the
+  // earliest tax-aware FIRE age for the lowest (most conservative) rate.
+  // With neither, the pot is never drawn (Infinity keeps the gate closed).
+  const lowestRateFireAge = fireDateByRate.get(lowestWithdrawalRate)?.age;
+  const mainDrawdownStart = config.targetRetirementAge ?? lowestRateFireAge ?? Infinity;
+  const { rows: projections } = runSimulation({
+    collectRows: true,
+    drawdownStartAge: mainDrawdownStart,
+    contributionStopAge: config.targetRetirementAge != null ? undefined : lowestRateFireAge,
   });
 
   const result: FireResult = { projections, fireDates, weightedAccessibleGrowthRate };

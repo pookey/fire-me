@@ -1209,6 +1209,10 @@ describe('fireCalculator', () => {
       const config = makeConfig({
         dateOfBirth: '1958-01-01',
         pensionAccessAge: 57,
+        // Force drawdown from the current age: the tax-aware FIRE criterion
+        // (correctly) never fires here, since the pot can't cover the
+        // grossed-up spend at a 4% withdrawal rate.
+        targetRetirementAge: 68,
         targetAnnualSpend: 3000000,
         growthRates: { equities: 0, bonds: 0, cash: 0, property: 0 },
         inflationRate: 0,
@@ -1448,6 +1452,83 @@ describe('fireCalculator', () => {
       });
       expect(result.bindingConstraint).toBe('pot-threshold');
       expect(result.fraction).toBeGreaterThan(0);
+    });
+  });
+
+  describe('tax-aware FIRE dates', () => {
+    const sippConfig = (overrides: Partial<FireConfig> = {}) =>
+      makeConfig({
+        dateOfBirth: '1966-01-01', // age 60, past pension access
+        pensionAccessAge: 57,
+        targetAnnualSpend: 30000,
+        growthRates: { equities: 0, bonds: 0, cash: 0, property: 0 },
+        inflationRate: 0,
+        statePensionAmount: 0,
+        statePensionAge: 99,
+        withdrawalRates: [4],
+        ...overrides,
+      });
+
+    it('requires the pot to cover the grossed-up (tax-inclusive) spend for SIPP drawdown', () => {
+      const funds = [makeFund({ category: 'pension', subcategory: 'equities', wrapper: 'sipp' })];
+
+      // Net £30k from a SIPP needs £34,357.50 gross (20% tax above the
+      // £12,570 personal allowance), so the 4% rule needs £858,937.50 —
+      // not the £750,000 a net-spend check would demand.
+      const tooSmall = calculateFireProjections(funds, [makeSnapshot({ value: 800000 })], sippConfig());
+      expect(tooSmall.fireDates[0].age).toBeNull();
+
+      const bigEnough = calculateFireProjections(funds, [makeSnapshot({ value: 900000 })], sippConfig());
+      expect(bigEnough.fireDates[0].age).toBe(60);
+      expect(bigEnough.fireDates[0].grossAnnualSpend).toBe(34357); // 34357.5 less solver convergence
+    });
+
+    it('fails the bridge when tax pushes cumulative withdrawals past accessible funds', () => {
+      // Age 50, 7 bridge years to SIPP access at 57. Net spend £30k costs
+      // £31,200 gross from a GIA (CGT: 50% gains, £3k exempt, 10% basic).
+      // £214k of GIA covers 7 net years (£210k) but not 7 gross years
+      // (£218.4k), so tax-aware FIRE slips one year to 51.
+      const funds = [
+        makeFund({ id: 'gia', category: 'savings', subcategory: 'equities', wrapper: 'gia' }),
+        makeFund({ id: 'sipp', category: 'pension', subcategory: 'equities', wrapper: 'sipp' }),
+      ];
+      const snapshots = [
+        makeSnapshot({ fundId: 'gia', value: 214000 }),
+        makeSnapshot({ fundId: 'sipp', value: 2000000 }),
+      ];
+      const config = sippConfig({ dateOfBirth: '1976-01-01' }); // age 50
+      const result = calculateFireProjections(funds, snapshots, config);
+
+      expect(result.fireDates[0].age).toBe(51);
+    });
+
+    it('grossUpFactor moves the sub-year FIRE fraction later', () => {
+      const row = (age: number, accessible: number): FireProjection => ({
+        age,
+        year: 2026 + (age - 60),
+        accessible,
+        locked: 0,
+        total: accessible,
+        annualSpend: 30000,
+        statePension: 0,
+        contributions: 0,
+      });
+      const base = {
+        prevRow: row(60, 700000),
+        fireRow: row(61, 800000),
+        withdrawalRate: 4,
+        pensionAccessAge: 57, // past access: no bridge, pure threshold
+        inflationRate: 0,
+        weightedAccessibleGrowthRate: 0,
+      };
+
+      // Net threshold £750k is crossed halfway through the year…
+      const untaxed = findSubYearFireFraction(base);
+      expect(untaxed.fraction).toBeCloseTo(0.5, 3);
+
+      // …but a 5% tax gross-up needs £787.5k, reached at 0.875.
+      const taxed = findSubYearFireFraction({ ...base, grossUpFactor: 1.05 });
+      expect(taxed.fraction).toBeCloseTo(0.875, 3);
     });
   });
 

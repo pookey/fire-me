@@ -104,6 +104,11 @@ export default function Dashboard() {
     } else if (!prevRow) {
       fractionalYears = fireIndex;
     } else {
+      // Tax gross-up implied by the FIRE-year simulation (net spend → tax-inclusive spend)
+      const fireRowNetSpend = fireRow.annualSpend - fireRow.statePension - (fireRow.definedBenefitIncome ?? 0);
+      const grossUpFactor = fd.grossAnnualSpend && fireRowNetSpend > 0
+        ? Math.max(1, fd.grossAnnualSpend / fireRowNetSpend)
+        : 1;
       const sub = findSubYearFireFraction({
         prevRow,
         fireRow,
@@ -111,6 +116,7 @@ export default function Dashboard() {
         pensionAccessAge: fireConfig.pensionAccessAge,
         inflationRate: fireConfig.inflationRate,
         weightedAccessibleGrowthRate: fireResult.weightedAccessibleGrowthRate,
+        grossUpFactor,
       });
       fractionalYears = (fireIndex - 1) + sub.fraction;
       bindingConstraint = sub.bindingConstraint;
