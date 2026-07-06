@@ -760,8 +760,10 @@ export function calculateFireProjections(
   // conservative withdrawal rate. Monotone in the stop age (contributing
   // longer never hurts), so binary search.
   if (!calcOpts.skipCoast) {
+    // Round: the UI permits fractional target ages (e.g. 48.1) but the
+    // simulation is indexed by integer age.
     const coastTargetAge = Math.min(
-      Math.max(config.coastTargetAge ?? config.targetRetirementAge ?? config.pensionAccessAge, currentAge),
+      Math.max(Math.round(config.coastTargetAge ?? config.targetRetirementAge ?? config.pensionAccessAge), currentAge),
       endAge
     );
     const coastPasses = (stopAge: number): boolean => {

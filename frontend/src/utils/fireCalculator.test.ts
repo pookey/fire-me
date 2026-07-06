@@ -1605,6 +1605,18 @@ describe('fireCalculator', () => {
       expect(result.coastFire).toEqual({ coastAge: null, targetAge: 57, alreadyCoasting: false });
     });
 
+    it('tolerates a fractional targetRetirementAge', () => {
+      const funds = [makeFund({ wrapper: 'isa', subcategory: 'equities' })];
+      const result = calculateFireProjections(
+        funds,
+        [makeSnapshot({ value: 800000 })],
+        coastConfig({ targetRetirementAge: 48.1 })
+      );
+
+      expect(result.coastFire?.targetAge).toBe(48);
+      expect(result.coastFire?.alreadyCoasting).toBe(true);
+    });
+
     it('honours coastTargetAge and skipCoast', () => {
       const funds = [makeFund({ wrapper: 'isa', subcategory: 'equities' })];
       const snapshots = [makeSnapshot({ value: 800000 })];
