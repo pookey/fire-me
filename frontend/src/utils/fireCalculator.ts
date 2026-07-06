@@ -436,12 +436,13 @@ export function calculateFireProjections(
           const availableLumpSum = Math.min(maxLumpSum, lumpSumAllowance - lumpSumTaken);
           if (availableLumpSum > 0) {
             fb.balance -= availableLumpSum;
-            // Move to ISA cash — find or create a synthetic ISA cash fund balance
-            let isaCash = balances.find(f => f.wrapper === 'isa' && f.subcategory === 'cash' && f.fundId === '__lumpsum_isa_cash');
-            if (!isaCash) {
-              isaCash = {
-                fundId: '__lumpsum_isa_cash',
-                wrapper: 'isa',
+            // Move to GIA cash — the £20k/yr ISA subscription limit rules out
+            // sheltering a large lump sum in an ISA immediately
+            let giaCash = balances.find(f => f.wrapper === 'gia' && f.subcategory === 'cash' && f.fundId === '__lumpsum_gia_cash');
+            if (!giaCash) {
+              giaCash = {
+                fundId: '__lumpsum_gia_cash',
+                wrapper: 'gia',
                 subcategory: 'cash',
                 drawdownAge: currentAge,
                 monthlyContribution: 0,
@@ -451,9 +452,9 @@ export function calculateFireProjections(
                 lumpSums: [],
                 balance: 0,
               };
-              balances.push(isaCash);
+              balances.push(giaCash);
             }
-            isaCash.balance += availableLumpSum;
+            giaCash.balance += availableLumpSum;
             lumpSumTaken += availableLumpSum;
           }
         }

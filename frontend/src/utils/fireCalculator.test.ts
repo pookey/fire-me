@@ -1086,7 +1086,7 @@ describe('fireCalculator', () => {
 
       const age40 = result.projections.find(p => p.age === 40)!;
       expect(age40.sipp).toBe(300000);
-      expect(age40.isa).toBe(100000);
+      expect(age40.gia).toBe(100000);
       expect(age40.accessible).toBe(400000);
       expect(age40.locked).toBe(0);
     });
@@ -1102,7 +1102,7 @@ describe('fireCalculator', () => {
 
       const age40 = result.projections.find(p => p.age === 40)!;
       expect(age40.sipp).toBe(400000);
-      expect(age40.isa).toBe(0);
+      expect(age40.gia).toBe(0);
     });
 
     it('does NOT take lump sum when take25PctLumpSum is undefined', () => {
@@ -1116,7 +1116,7 @@ describe('fireCalculator', () => {
 
       const age40 = result.projections.find(p => p.age === 40)!;
       expect(age40.sipp).toBe(400000);
-      expect(age40.isa).toBe(0);
+      expect(age40.gia).toBe(0);
     });
 
     it('respects lump sum allowance cap', () => {
@@ -1130,7 +1130,7 @@ describe('fireCalculator', () => {
       const result = calculateFireProjections(funds, snapshots, config);
 
       const age40 = result.projections.find(p => p.age === 40)!;
-      expect(age40.isa).toBe(26827500);
+      expect(age40.gia).toBe(26827500);
       expect(age40.sipp).toBe(200000000 - 26827500);
     });
 
@@ -1156,11 +1156,11 @@ describe('fireCalculator', () => {
 
       // At age 57: sipp1 takes min(800000 * 0.25, 268275) = 200000
       const age57 = result.projections.find(p => p.age === 57)!;
-      expect(age57.isa).toBe(200000);
+      expect(age57.gia).toBe(200000);
 
       // At age 60: sipp2 takes min(800000 * 0.25, 268275 - 200000) = 68275
       const age60 = result.projections.find(p => p.age === 60)!;
-      expect(age60.isa).toBe(268275); // cumulative total = allowance
+      expect(age60.gia).toBe(268275); // cumulative total = allowance
     });
 
     it('takes lump sum at per-fund drawdown age, not global pensionAccessAge', () => {
@@ -1175,12 +1175,31 @@ describe('fireCalculator', () => {
       // At age 57: no lump sum (fund's drawdownAge is 60)
       const age57 = result.projections.find(p => p.age === 57)!;
       expect(age57.sipp).toBe(400000);
-      expect(age57.isa).toBe(0);
+      expect(age57.gia).toBe(0);
 
       // At age 60: lump sum taken
       const age60 = result.projections.find(p => p.age === 60)!;
       expect(age60.sipp).toBe(300000);
-      expect(age60.isa).toBe(100000);
+      expect(age60.gia).toBe(100000);
+    });
+
+    it('drawdown from the lump-sum GIA incurs CGT', () => {
+      const funds = [makeFund({ category: 'pension', subcategory: 'equities', take25PctLumpSum: true })];
+      const snapshots = [makeSnapshot({ value: 400000 })];
+      const config = makeConfig({
+        pensionAccessAge: 40,
+        targetRetirementAge: 40,
+        targetAnnualSpend: 20000,
+        growthRates: { equities: 0, bonds: 0, cash: 0, property: 0 },
+        statePensionAmount: 0,
+        statePensionAge: 99,
+      });
+      const result = calculateFireProjections(funds, snapshots, config);
+
+      // £20k net from the £100k lump-sum GIA: gains 10k − 3k exempt = 7k @ 10%
+      const age40 = result.projections.find(p => p.age === 40)!;
+      expect(age40.drawdownGia).toBe(20000);
+      expect(age40.taxPaid).toBe(700);
     });
   });
 
