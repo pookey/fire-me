@@ -40,3 +40,6 @@ infrastructure/dist/
 infrastructure/**/*.js
 infrastructure/**/*.d.ts
 infrastructure/**/*.js.map
+
+# Generated personal financial report — never commit
+fire-report.html
