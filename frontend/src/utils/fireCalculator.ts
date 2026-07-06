@@ -60,6 +60,28 @@ function resolveLumpSumAge(dateStr: string, currentYear: number, currentAge: num
   return currentAge + (y - currentYear);
 }
 
+/** Unrounded per-year outputs of a simulation run, for feasibility checks. */
+interface SimYearStats {
+  age: number;
+  accessible: number;
+  total: number;
+  annualSpend: number;
+  guaranteedIncome: number;
+  netSpend: number;
+  taxPaid: number;
+  /** Net spend the drawdown could not cover this year (0 when not drawing down). */
+  unmetSpend: number;
+}
+
+interface SimOptions {
+  /** Stop contributions from this age (overrides the targetRetirementAge cutoff). */
+  contributionStopAge?: number;
+  /** Force drawdown from this age, replacing the pot-threshold/target gate. */
+  drawdownStartAge?: number;
+  /** Build full FireProjection rows (main projection only; stats are always produced). */
+  collectRows?: boolean;
+}
+
 const DEFAULT_TAX_CONFIG: TaxConfig = {
   personalAllowance: 12570,
   basicRateThreshold: 50270,
@@ -331,168 +353,151 @@ export function calculateFireProjections(
     return accessibleFunds.reduce((s, fb) => s + (config.growthRates[fb.subcategory] / 100) * (fb.balance / totalBal), 0);
   })();
 
-  const projections: FireProjection[] = [];
-  let lumpSumTaken = 0;
   const lowestWithdrawalRate = Math.min(...config.withdrawalRates);
 
-  for (let age = currentAge; age <= endAge; age++) {
-    const year = currentYear + (age - currentAge);
-    const yearsFromNow = age - currentAge;
-    const inflationMultiplier = Math.pow(1 + config.inflationRate / 100, yearsFromNow);
-    const annualSpend = config.targetAnnualSpend * inflationMultiplier;
+  /**
+   * Run the year-by-year simulation over a fresh copy of the fund balances.
+   * The main projection uses collectRows; feasibility probes (FIRE dates,
+   * Coast FIRE) re-run with an explicit drawdownStartAge and read stats only.
+   */
+  const runSimulation = (opts: SimOptions = {}): { rows: FireProjection[]; stats: SimYearStats[] } => {
+    const balances: FundBalance[] = fundBalances.map(fb => ({ ...fb }));
+    let lumpSumTaken = 0;
+    const rows: FireProjection[] = [];
+    const stats: SimYearStats[] = [];
 
-    // Apply per-fund contributions (stop at targetRetirementAge if set).
-    // The first projection year that straddles a fund's contributionStartDate is
-    // prorated by the number of months remaining in that year.
-    const contributionCutoffAge = config.targetRetirementAge
-      ? Math.min(config.targetRetirementAge, endAge)
-      : endAge;
-    let yearContributions = 0;
-    for (const fb of fundBalances) {
-      if (!(fb.monthlyContribution > 0)) continue;
-      if (age > fb.contributionEndAge) continue;
-      if (age >= contributionCutoffAge) continue;
-      // Months of [age, age+1) on/after contributionStartAge, clamped to [0, 12].
-      const monthsActive = Math.max(0, Math.min(12, (age + 1 - fb.contributionStartAge) * 12));
-      if (monthsActive <= 0) continue;
-      const amount = fb.monthlyContribution * monthsActive;
-      fb.balance += amount;
-      yearContributions += amount;
-    }
+    for (let age = currentAge; age <= endAge; age++) {
+      const year = currentYear + (age - currentAge);
+      const yearsFromNow = age - currentAge;
+      const inflationMultiplier = Math.pow(1 + config.inflationRate / 100, yearsFromNow);
+      const annualSpend = config.targetAnnualSpend * inflationMultiplier;
 
-    // Apply per-fund lump sums whose date falls in this projection year
-    for (const fb of fundBalances) {
-      for (const ls of fb.lumpSums) {
-        if (ls.active === false) continue;
-        if (resolveLumpSumAge(ls.date, currentYear, currentAge) !== age) continue;
-        if (ls.type === 'inflow') {
-          fb.balance += ls.amount;
-        } else {
-          fb.balance = Math.max(0, fb.balance - ls.amount);
-        }
+      // Apply per-fund contributions (stop at targetRetirementAge if set).
+      // The first projection year that straddles a fund's contributionStartDate is
+      // prorated by the number of months remaining in that year.
+      const contributionCutoffAge = opts.contributionStopAge ?? (config.targetRetirementAge
+        ? Math.min(config.targetRetirementAge, endAge)
+        : endAge);
+      let yearContributions = 0;
+      for (const fb of balances) {
+        if (!(fb.monthlyContribution > 0)) continue;
+        if (age > fb.contributionEndAge) continue;
+        if (age >= contributionCutoffAge) continue;
+        // Months of [age, age+1) on/after contributionStartAge, clamped to [0, 12].
+        const monthsActive = Math.max(0, Math.min(12, (age + 1 - fb.contributionStartAge) * 12));
+        if (monthsActive <= 0) continue;
+        const amount = fb.monthlyContribution * monthsActive;
+        fb.balance += amount;
+        yearContributions += amount;
       }
-    }
 
-    // Per-fund pension 25% tax-free lump sum at each fund's drawdown age
-    for (const fb of fundBalances) {
-      if (fb.wrapper === 'sipp' && fb.take25PctLumpSum && age === fb.drawdownAge) {
-        const maxLumpSum = fb.balance * 0.25;
-        const availableLumpSum = Math.min(maxLumpSum, lumpSumAllowance - lumpSumTaken);
-        if (availableLumpSum > 0) {
-          fb.balance -= availableLumpSum;
-          // Move to ISA cash — find or create a synthetic ISA cash fund balance
-          let isaCash = fundBalances.find(f => f.wrapper === 'isa' && f.subcategory === 'cash' && f.fundId === '__lumpsum_isa_cash');
-          if (!isaCash) {
-            isaCash = {
-              fundId: '__lumpsum_isa_cash',
-              wrapper: 'isa',
-              subcategory: 'cash',
-              drawdownAge: currentAge,
-              monthlyContribution: 0,
-              contributionStartAge: currentAge,
-              contributionEndAge: endAge,
-              take25PctLumpSum: false,
-              lumpSums: [],
-              balance: 0,
-            };
-            fundBalances.push(isaCash);
+      // Apply per-fund lump sums whose date falls in this projection year
+      for (const fb of balances) {
+        for (const ls of fb.lumpSums) {
+          if (ls.active === false) continue;
+          if (resolveLumpSumAge(ls.date, currentYear, currentAge) !== age) continue;
+          if (ls.type === 'inflow') {
+            fb.balance += ls.amount;
+          } else {
+            fb.balance = Math.max(0, fb.balance - ls.amount);
           }
-          isaCash.balance += availableLumpSum;
-          lumpSumTaken += availableLumpSum;
         }
       }
-    }
 
-    // Aggregate into wrapper buckets for output
-    const wrapperBuckets = aggregateByWrapper(fundBalances);
-    const isaTotal = totalBucket(wrapperBuckets.isa);
-    const lisaTotal = totalBucket(wrapperBuckets.lisa);
-    const sippTotal = totalBucket(wrapperBuckets.sipp);
-    const giaTotal = totalBucket(wrapperBuckets.gia);
-
-    // Accessibility: per-fund based on drawdownAge
-    let accessibleTotal = 0;
-    let lockedTotal = 0;
-    const accessibleBucket = zeroBucket();
-    const lockedBucket = zeroBucket();
-
-    for (const fb of fundBalances) {
-      if (age >= fb.drawdownAge) {
-        accessibleTotal += fb.balance;
-        accessibleBucket[fb.subcategory] += fb.balance;
-      } else {
-        lockedTotal += fb.balance;
-        lockedBucket[fb.subcategory] += fb.balance;
+      // Per-fund pension 25% tax-free lump sum at each fund's drawdown age
+      for (const fb of balances) {
+        if (fb.wrapper === 'sipp' && fb.take25PctLumpSum && age === fb.drawdownAge) {
+          const maxLumpSum = fb.balance * 0.25;
+          const availableLumpSum = Math.min(maxLumpSum, lumpSumAllowance - lumpSumTaken);
+          if (availableLumpSum > 0) {
+            fb.balance -= availableLumpSum;
+            // Move to ISA cash — find or create a synthetic ISA cash fund balance
+            let isaCash = balances.find(f => f.wrapper === 'isa' && f.subcategory === 'cash' && f.fundId === '__lumpsum_isa_cash');
+            if (!isaCash) {
+              isaCash = {
+                fundId: '__lumpsum_isa_cash',
+                wrapper: 'isa',
+                subcategory: 'cash',
+                drawdownAge: currentAge,
+                monthlyContribution: 0,
+                contributionStartAge: currentAge,
+                contributionEndAge: endAge,
+                take25PctLumpSum: false,
+                lumpSums: [],
+                balance: 0,
+              };
+              balances.push(isaCash);
+            }
+            isaCash.balance += availableLumpSum;
+            lumpSumTaken += availableLumpSum;
+          }
+        }
       }
-    }
 
-    const total = accessibleTotal + lockedTotal;
+      // Aggregate into wrapper buckets for output
+      const wrapperBuckets = aggregateByWrapper(balances);
+      const isaTotal = totalBucket(wrapperBuckets.isa);
+      const lisaTotal = totalBucket(wrapperBuckets.lisa);
+      const sippTotal = totalBucket(wrapperBuckets.sipp);
+      const giaTotal = totalBucket(wrapperBuckets.gia);
 
-    // State pension — optionally grows with inflation (default: true)
-    const statePensionInflationLinked = config.statePensionInflationLinked ?? true;
-    const statePensionMultiplier = statePensionInflationLinked ? inflationMultiplier : 1;
-    const statePension = age >= config.statePensionAge ? config.statePensionAmount * statePensionMultiplier : 0;
+      // Accessibility: per-fund based on drawdownAge
+      let accessibleTotal = 0;
+      let lockedTotal = 0;
+      const accessibleBucket = zeroBucket();
+      const lockedBucket = zeroBucket();
 
-    // DB pensions — optionally inflation-linked with optional cap
-    let dbIncome = 0;
-    for (const dbp of definedBenefitPensions) {
-      if (age >= dbp.startAge) {
-        if (dbp.inflationLinked) {
-          const yearsFromStart = age - dbp.startAge;
-          const capRate = dbp.inflationCap != null ? Math.min(config.inflationRate, dbp.inflationCap) : config.inflationRate;
-          dbIncome += dbp.annualAmount * Math.pow(1 + capRate / 100, yearsFromStart);
+      for (const fb of balances) {
+        if (age >= fb.drawdownAge) {
+          accessibleTotal += fb.balance;
+          accessibleBucket[fb.subcategory] += fb.balance;
         } else {
-          dbIncome += dbp.annualAmount;
+          lockedTotal += fb.balance;
+          lockedBucket[fb.subcategory] += fb.balance;
         }
       }
-    }
 
-    const projection: FireProjection = {
-      age,
-      year,
-      accessible: Math.round(accessibleTotal),
-      locked: Math.round(lockedTotal),
-      total: Math.round(total),
-      annualSpend: Math.round(annualSpend),
-      statePension: Math.round(statePension),
-      contributions: Math.round(yearContributions),
-      isa: Math.round(isaTotal),
-      lisa: Math.round(lisaTotal),
-      sipp: Math.round(sippTotal),
-      gia: Math.round(giaTotal),
-      definedBenefitIncome: Math.round(dbIncome),
-      accessibleBreakdown: {
-        equities: Math.round(accessibleBucket.equities),
-        bonds: Math.round(accessibleBucket.bonds),
-        cash: Math.round(accessibleBucket.cash),
-        property: Math.round(accessibleBucket.property),
-      },
-      lockedBreakdown: {
-        equities: Math.round(lockedBucket.equities),
-        bonds: Math.round(lockedBucket.bonds),
-        cash: Math.round(lockedBucket.cash),
-        property: Math.round(lockedBucket.property),
-      },
-    };
+      const total = accessibleTotal + lockedTotal;
 
-    if (showRealTerms) {
-      projection.realTotal = Math.round(total / inflationMultiplier);
-    }
+      // State pension — optionally grows with inflation (default: true)
+      const statePensionInflationLinked = config.statePensionInflationLinked ?? true;
+      const statePensionMultiplier = statePensionInflationLinked ? inflationMultiplier : 1;
+      const statePension = age >= config.statePensionAge ? config.statePensionAmount * statePensionMultiplier : 0;
 
-    // Drawdown logic — group accessible funds by wrapper, withdraw in drawdownOrder
-    const guaranteedIncome = statePension + dbIncome;
-    const netSpend = annualSpend - guaranteedIncome;
-    let yearTaxPaid = 0;
-    let yearGrossWithdrawal = 0;
-    const yearDrawdownByWrapper: Record<string, number> = { isa: 0, lisa: 0, sipp: 0, gia: 0, none: 0 };
+      // DB pensions — optionally inflation-linked with optional cap
+      let dbIncome = 0;
+      for (const dbp of definedBenefitPensions) {
+        if (age >= dbp.startAge) {
+          if (dbp.inflationLinked) {
+            const yearsFromStart = age - dbp.startAge;
+            const capRate = dbp.inflationCap != null ? Math.min(config.inflationRate, dbp.inflationCap) : config.inflationRate;
+            dbIncome += dbp.annualAmount * Math.pow(1 + capRate / 100, yearsFromStart);
+          } else {
+            dbIncome += dbp.annualAmount;
+          }
+        }
+      }
 
-    let isDrawingDown = false;
-    if (netSpend > 0) {
-      const requiredPot = netSpend / (lowestWithdrawalRate / 100);
-      const potIsSufficient = accessibleTotal >= requiredPot;
-      const forcedByTarget = config.targetRetirementAge != null && age >= config.targetRetirementAge;
-      if (potIsSufficient || forcedByTarget) {
-        isDrawingDown = true;
+      // Drawdown logic — group accessible funds by wrapper, withdraw in drawdownOrder
+      const guaranteedIncome = statePension + dbIncome;
+      const netSpend = annualSpend - guaranteedIncome;
+      let yearTaxPaid = 0;
+      let yearGrossWithdrawal = 0;
+      let unmetSpend = 0;
+      const yearDrawdownByWrapper: Record<string, number> = { isa: 0, lisa: 0, sipp: 0, gia: 0, none: 0 };
+
+      let isDrawingDown = false;
+      if (netSpend > 0) {
+        if (opts.drawdownStartAge != null) {
+          isDrawingDown = age >= opts.drawdownStartAge;
+        } else {
+          const requiredPot = netSpend / (lowestWithdrawalRate / 100);
+          const potIsSufficient = accessibleTotal >= requiredPot;
+          const forcedByTarget = config.targetRetirementAge != null && age >= config.targetRetirementAge;
+          isDrawingDown = potIsSufficient || forcedByTarget;
+        }
+      }
+      if (isDrawingDown) {
         let remaining = netSpend;
         let otherTaxableIncome = guaranteedIncome;
 
@@ -500,7 +505,7 @@ export function calculateFireProjections(
           if (remaining <= 0) break;
 
           // Get accessible funds for this wrapper
-          const accessibleFundsForWrapper = fundBalances.filter(
+          const accessibleFundsForWrapper = balances.filter(
             fb => fb.wrapper === wrapper && age >= fb.drawdownAge && fb.balance > 0
           );
           const available = accessibleFundsForWrapper.reduce((sum, fb) => sum + fb.balance, 0);
@@ -538,26 +543,77 @@ export function calculateFireProjections(
 
           remaining -= (actualGross - actualTax);
         }
+
+        unmetSpend = Math.max(0, remaining);
+      }
+
+      if (opts.collectRows) {
+        const projection: FireProjection = {
+          age,
+          year,
+          accessible: Math.round(accessibleTotal),
+          locked: Math.round(lockedTotal),
+          total: Math.round(total),
+          annualSpend: Math.round(annualSpend),
+          statePension: Math.round(statePension),
+          contributions: Math.round(yearContributions),
+          isa: Math.round(isaTotal),
+          lisa: Math.round(lisaTotal),
+          sipp: Math.round(sippTotal),
+          gia: Math.round(giaTotal),
+          definedBenefitIncome: Math.round(dbIncome),
+          accessibleBreakdown: {
+            equities: Math.round(accessibleBucket.equities),
+            bonds: Math.round(accessibleBucket.bonds),
+            cash: Math.round(accessibleBucket.cash),
+            property: Math.round(accessibleBucket.property),
+          },
+          lockedBreakdown: {
+            equities: Math.round(lockedBucket.equities),
+            bonds: Math.round(lockedBucket.bonds),
+            cash: Math.round(lockedBucket.cash),
+            property: Math.round(lockedBucket.property),
+          },
+        };
+
+        if (showRealTerms) {
+          projection.realTotal = Math.round(total / inflationMultiplier);
+        }
+
+        projection.taxPaid = Math.round(yearTaxPaid);
+        projection.grossWithdrawal = Math.round(yearGrossWithdrawal);
+        projection.netIncome = Math.round(guaranteedIncome + yearGrossWithdrawal - yearTaxPaid);
+        projection.drawdownIncome = Math.round(isDrawingDown ? netSpend : 0);
+        projection.drawdownIsa = Math.round(yearDrawdownByWrapper.isa);
+        projection.drawdownLisa = Math.round(yearDrawdownByWrapper.lisa);
+        projection.drawdownSipp = Math.round(yearDrawdownByWrapper.sipp);
+        projection.drawdownGia = Math.round(yearDrawdownByWrapper.gia);
+        projection.guaranteedIncome = Math.round(guaranteedIncome);
+        rows.push(projection);
+      }
+
+      stats.push({
+        age,
+        accessible: accessibleTotal,
+        total,
+        annualSpend,
+        guaranteedIncome,
+        netSpend,
+        taxPaid: yearTaxPaid,
+        unmetSpend,
+      });
+
+      // Grow all fund balances for next year
+      for (const fb of balances) {
+        const rate = config.growthRates[fb.subcategory] / 100;
+        fb.balance *= (1 + rate);
       }
     }
 
-    projection.taxPaid = Math.round(yearTaxPaid);
-    projection.grossWithdrawal = Math.round(yearGrossWithdrawal);
-    projection.netIncome = Math.round(guaranteedIncome + yearGrossWithdrawal - yearTaxPaid);
-    projection.drawdownIncome = Math.round(isDrawingDown ? netSpend : 0);
-    projection.drawdownIsa = Math.round(yearDrawdownByWrapper.isa);
-    projection.drawdownLisa = Math.round(yearDrawdownByWrapper.lisa);
-    projection.drawdownSipp = Math.round(yearDrawdownByWrapper.sipp);
-    projection.drawdownGia = Math.round(yearDrawdownByWrapper.gia);
-    projection.guaranteedIncome = Math.round(guaranteedIncome);
-    projections.push(projection);
+    return { rows, stats };
+  };
 
-    // Grow all fund balances for next year
-    for (const fb of fundBalances) {
-      const rate = config.growthRates[fb.subcategory] / 100;
-      fb.balance *= (1 + rate);
-    }
-  }
+  const { rows: projections } = runSimulation({ collectRows: true });
 
   // Calculate FIRE dates for each withdrawal rate.
   // For each candidate age, check: (1) accessible >= requiredPot for long-term
