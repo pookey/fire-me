@@ -92,6 +92,8 @@ export interface FireConfig {
   lumpSumAllowance?: number; // default 268275 (£) - 25% tax-free from SIPP
   statePensionInflationLinked?: boolean; // default true — grow with inflation
   targetRetirementAge?: number;
+  /** Retirement age Coast FIRE aims at. Defaults to targetRetirementAge ?? pensionAccessAge. */
+  coastTargetAge?: number;
 }
 
 export interface AssetBreakdown {
@@ -131,6 +133,12 @@ export interface FireProjection {
 
 export interface FireResult {
   projections: FireProjection[];
+  /** Coast FIRE: earliest age contributions could stop while still retiring at targetAge. */
+  coastFire?: {
+    coastAge: number | null;
+    targetAge: number;
+    alreadyCoasting: boolean;
+  };
   /** grossAnnualSpend is the tax-inclusive net-of-guaranteed-income spend in the FIRE year (nominal £). */
   fireDates: { withdrawalRate: number; age: number | null; year: number | null; grossAnnualSpend?: number | null }[];
   /** Balance-weighted growth rate of accessible (non-SIPP, non-LISA) funds, decimal e.g. 0.056. Used for sub-year bridge-check interpolation. */

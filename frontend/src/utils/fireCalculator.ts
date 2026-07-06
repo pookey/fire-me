@@ -330,7 +330,8 @@ export function earliestFireAge(fireDates: FireResult['fireDates']): number | nu
 export function calculateFireProjections(
   funds: Fund[],
   snapshots: Snapshot[],
-  config: FireConfig
+  config: FireConfig,
+  calcOpts: { skipCoast?: boolean } = {}
 ): FireResult {
   const birthDate = new Date(config.dateOfBirth);
   const currentYear = new Date().getFullYear();
@@ -694,6 +695,19 @@ export function calculateFireProjections(
   // at the candidate age itself.
   const fullAccessAge = fundBalances.reduce((m, fb) => Math.max(m, fb.drawdownAge), currentAge);
 
+  // For a simulated retirement at retireAge: (a) verify every bridge year until
+  // full access is funded, and (b) return the post-bridge year's stats so the
+  // caller can apply an SWR threshold on the tax-inclusive spend.
+  const assessRetirementAt = (stats: SimYearStats[], retireAge: number): SimYearStats | null => {
+    const statAt = (a: number) => stats[a - currentAge];
+    for (let a = retireAge; a < Math.min(fullAccessAge, endAge + 1); a++) {
+      if (statAt(a).unmetSpend > UNMET_TOLERANCE) return null;
+    }
+    return statAt(Math.min(Math.max(retireAge, fullAccessAge), endAge));
+  };
+  const sustainsRate = (s: SimYearStats, rate: number): boolean =>
+    s.netSpend <= 0 || s.accessible >= (s.netSpend + s.taxPaid) / (rate / 100);
+
   const fireDateByRate = new Map<number, { age: number; year: number; grossAnnualSpend: number }>();
   for (let candidate = currentAge; candidate <= endAge; candidate++) {
     if (fireDateByRate.size === config.withdrawalRates.length) break;
@@ -701,26 +715,13 @@ export function calculateFireProjections(
       contributionStopAge: Math.min(defaultContributionCutoff, candidate),
       drawdownStartAge: candidate,
     });
-    const statAt = (a: number) => stats[a - currentAge];
+    const s = assessRetirementAt(stats, candidate);
+    if (!s) continue;
 
-    // (a) Bridge: every year from candidate until full access is fully funded
-    let bridgeOk = true;
-    for (let a = candidate; a < Math.min(fullAccessAge, endAge + 1); a++) {
-      if (statAt(a).unmetSpend > UNMET_TOLERANCE) {
-        bridgeOk = false;
-        break;
-      }
-    }
-    if (!bridgeOk) continue;
-
-    // (b) Sustainability of the post-bridge pot, grossed up for tax
-    const checkAge = Math.min(Math.max(candidate, fullAccessAge), endAge);
-    const s = statAt(checkAge);
     const grossSpend = s.netSpend + s.taxPaid;
-
     for (const rate of config.withdrawalRates) {
       if (fireDateByRate.has(rate)) continue;
-      if (s.netSpend <= 0 || s.accessible >= grossSpend / (rate / 100)) {
+      if (sustainsRate(s, rate)) {
         fireDateByRate.set(rate, {
           age: candidate,
           year: currentYear + (candidate - currentAge),
@@ -753,6 +754,40 @@ export function calculateFireProjections(
   });
 
   const result: FireResult = { projections, fireDates, weightedAccessibleGrowthRate };
+
+  // Coast FIRE: the earliest age contributions could stop while a retirement
+  // at coastTargetAge still passes the same tax-aware criterion at the most
+  // conservative withdrawal rate. Monotone in the stop age (contributing
+  // longer never hurts), so binary search.
+  if (!calcOpts.skipCoast) {
+    const coastTargetAge = Math.min(
+      Math.max(config.coastTargetAge ?? config.targetRetirementAge ?? config.pensionAccessAge, currentAge),
+      endAge
+    );
+    const coastPasses = (stopAge: number): boolean => {
+      const { stats } = runSimulation({ contributionStopAge: stopAge, drawdownStartAge: coastTargetAge });
+      const s = assessRetirementAt(stats, coastTargetAge);
+      return s !== null && sustainsRate(s, lowestWithdrawalRate);
+    };
+
+    if (coastPasses(currentAge)) {
+      result.coastFire = { coastAge: currentAge, targetAge: coastTargetAge, alreadyCoasting: true };
+    } else if (!coastPasses(coastTargetAge)) {
+      result.coastFire = { coastAge: null, targetAge: coastTargetAge, alreadyCoasting: false };
+    } else {
+      let lo = currentAge; // fails
+      let hi = coastTargetAge; // passes
+      while (hi - lo > 1) {
+        const mid = Math.floor((lo + hi) / 2);
+        if (coastPasses(mid)) {
+          hi = mid;
+        } else {
+          lo = mid;
+        }
+      }
+      result.coastFire = { coastAge: hi, targetAge: coastTargetAge, alreadyCoasting: false };
+    }
+  }
 
   if (config.targetRetirementAge) {
     const targetProjection = projections.find(p => p.age === config.targetRetirementAge);

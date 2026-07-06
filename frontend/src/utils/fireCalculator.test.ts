@@ -1571,6 +1571,52 @@ describe('fireCalculator', () => {
     });
   });
 
+  describe('coast FIRE', () => {
+    const coastConfig = (overrides: Partial<FireConfig> = {}) =>
+      makeConfig({
+        // age 36; coast target defaults to pensionAccessAge 57
+        growthRates: { equities: 0, bonds: 0, cash: 0, property: 0 },
+        statePensionAmount: 0,
+        statePensionAge: 99,
+        withdrawalRates: [4],
+        ...overrides,
+      });
+
+    it('reports alreadyCoasting when the pot needs no further contributions', () => {
+      const funds = [makeFund({ wrapper: 'isa', subcategory: 'equities' })];
+      const result = calculateFireProjections(funds, [makeSnapshot({ value: 800000 })], coastConfig());
+
+      expect(result.coastFire).toEqual({ coastAge: 36, targetAge: 57, alreadyCoasting: true });
+    });
+
+    it('finds the earliest age contributions can stop', () => {
+      // £600k ISA + £12k/yr contributions, £750k needed at 57 (zero growth):
+      // 13 years of contributions (ages 36-48) reach £756k, 12 fall short.
+      const funds = [makeFund({ wrapper: 'isa', subcategory: 'equities', monthlyContribution: 1000 })];
+      const result = calculateFireProjections(funds, [makeSnapshot({ value: 600000 })], coastConfig());
+
+      expect(result.coastFire).toEqual({ coastAge: 49, targetAge: 57, alreadyCoasting: false });
+    });
+
+    it('returns null coastAge when coasting is unreachable', () => {
+      const funds = [makeFund({ wrapper: 'isa', subcategory: 'equities' })];
+      const result = calculateFireProjections(funds, [makeSnapshot({ value: 1000 })], coastConfig());
+
+      expect(result.coastFire).toEqual({ coastAge: null, targetAge: 57, alreadyCoasting: false });
+    });
+
+    it('honours coastTargetAge and skipCoast', () => {
+      const funds = [makeFund({ wrapper: 'isa', subcategory: 'equities' })];
+      const snapshots = [makeSnapshot({ value: 800000 })];
+
+      const custom = calculateFireProjections(funds, snapshots, coastConfig({ coastTargetAge: 50 }));
+      expect(custom.coastFire?.targetAge).toBe(50);
+
+      const skipped = calculateFireProjections(funds, snapshots, coastConfig(), { skipCoast: true });
+      expect(skipped.coastFire).toBeUndefined();
+    });
+  });
+
   describe('accessibleGrowthRateFromRow', () => {
     const growthRates = { equities: 7, bonds: 3, cash: 1, property: 4 };
 

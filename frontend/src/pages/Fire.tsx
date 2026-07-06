@@ -76,7 +76,7 @@ export default function Fire() {
       .filter(s => selectedScenarioIds.includes(s.id))
       .map(s => ({
         scenario: s,
-        result: calculateFireProjections(funds, latestSnapshotsInPounds, s.config),
+        result: calculateFireProjections(funds, latestSnapshotsInPounds, s.config, { skipCoast: true }),
       }));
   }, [funds, latestSnapshotsInPounds, scenarios, selectedScenarioIds]);
 
@@ -240,7 +240,7 @@ export default function Fire() {
       {/* Hero Dashboard */}
       {result && (
         <div className="card p-6 animate-in stagger-1">
-          <div className="grid grid-cols-2 lg:grid-cols-4 gap-6">
+          <div className="grid grid-cols-2 lg:grid-cols-5 gap-6">
             {/* Earliest FIRE Age */}
             <div className="text-center">
               <p className="text-[0.65rem] font-medium uppercase tracking-wider mb-1" style={{ color: 'var(--text-tertiary)' }}>
@@ -326,6 +326,23 @@ export default function Fire() {
               </p>
               <p className="text-xs mt-1" style={{ color: 'var(--text-muted)' }}>
                 total: {formatPoundsShort(result.projections.find(p => p.age === currentAge)?.total ?? 0)}
+              </p>
+            </div>
+
+            {/* Coast FIRE */}
+            <div className="text-center">
+              <p className="text-[0.65rem] font-medium uppercase tracking-wider mb-1" style={{ color: 'var(--text-tertiary)' }}>
+                Coast FIRE Age
+              </p>
+              <p className="font-display text-4xl font-bold" style={{ color: result.coastFire?.alreadyCoasting ? 'var(--teal-bright)' : 'var(--text-primary)' }}>
+                {result.coastFire?.coastAge ?? '—'}
+              </p>
+              <p className="text-xs mt-1" style={{ color: 'var(--text-muted)' }}>
+                {result.coastFire?.alreadyCoasting
+                  ? `already coasting to ${result.coastFire.targetAge}`
+                  : result.coastFire?.coastAge != null
+                    ? `stop contributing, retire at ${result.coastFire.targetAge}`
+                    : `can't coast to ${result.coastFire?.targetAge ?? '—'}`}
               </p>
             </div>
           </div>
