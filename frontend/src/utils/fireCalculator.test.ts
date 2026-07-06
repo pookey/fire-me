@@ -519,8 +519,9 @@ describe('fireCalculator', () => {
 
       // Year 0: 0 + 12000 = 12000
       expect(result.projections[0].accessible).toBe(12000);
-      // Year 1: 12000 * 1.10 + 12000 = 13200 + 12000 = 25200
-      expect(result.projections[1].accessible).toBe(25200);
+      // Year 1: contributions are spread through the year, so they only earn
+      // half a year's growth: 12000 * 1.10^0.5 + 12000 ≈ 24586
+      expect(result.projections[1].accessible).toBe(24586);
     });
 
     it('mixed: some funds with contributions, some without', () => {
@@ -685,6 +686,25 @@ describe('fireCalculator', () => {
   });
 
   describe('lump sums', () => {
+    it('grows a lump sum only from its month within the year', () => {
+      const makeCase = (date: string) => {
+        const funds = [makeFund({
+          subcategory: 'equities',
+          lumpSums: [{ type: 'inflow', amount: 12000, date, description: 'Bonus' }],
+        })];
+        const snapshots = [makeSnapshot({ value: 0 })];
+        const config = makeConfig({
+          growthRates: { equities: 10, bonds: 0, cash: 0, property: 0 },
+        });
+        return calculateFireProjections(funds, snapshots, config);
+      };
+
+      // Mid-month convention: January lump has 11.5/12 of the year to grow
+      // (12000 × 1.1^(11.5/12) ≈ 13148); December has only 0.5/12 (≈ 12048).
+      expect(makeCase('2026-01').projections[1].accessible).toBe(13148);
+      expect(makeCase('2026-12').projections[1].accessible).toBe(12048);
+    });
+
     it('applies an inflow lump sum in the year of the specified date', () => {
       const funds = [makeFund({
         subcategory: 'equities',

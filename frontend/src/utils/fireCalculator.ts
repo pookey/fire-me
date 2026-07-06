@@ -397,6 +397,16 @@ export function calculateFireProjections(
       const inflationMultiplier = Math.pow(1 + config.inflationRate / 100, yearsFromNow);
       const annualSpend = config.targetAnnualSpend * inflationMultiplier;
 
+      // Mid-year additions (contributions, lump sums) only earn growth for the
+      // fraction of the year they were actually invested. Track each addition's
+      // remaining growth years so the year-end growth step can pro-rate.
+      const yearAdditions = new Map<FundBalance, { amount: number; growthYears: number }[]>();
+      const addAdjustment = (fb: FundBalance, amount: number, growthYears: number) => {
+        const list = yearAdditions.get(fb) ?? [];
+        list.push({ amount, growthYears });
+        yearAdditions.set(fb, list);
+      };
+
       // Apply per-fund contributions (stop at targetRetirementAge if set).
       // The first projection year that straddles a fund's contributionStartDate is
       // prorated by the number of months remaining in that year.
@@ -414,6 +424,9 @@ export function calculateFireProjections(
         const amount = fb.monthlyContribution * monthsActive;
         fb.balance += amount;
         yearContributions += amount;
+        // Spread over the final monthsActive months → average time invested
+        // is half that window.
+        addAdjustment(fb, amount, monthsActive / 24);
       }
 
       // Apply per-fund lump sums whose date falls in this projection year
@@ -421,10 +434,17 @@ export function calculateFireProjections(
         for (const ls of fb.lumpSums) {
           if (ls.active === false) continue;
           if (resolveLumpSumAge(ls.date, currentYear, currentAge) !== age) continue;
+          // Mid-month convention: a lump sum in month m has (12.5 − m)/12
+          // years left to grow this year.
+          const month = Number(ls.date.split('-')[1]);
+          const growthYears = month >= 1 && month <= 12 ? (12.5 - month) / 12 : 0.5;
           if (ls.type === 'inflow') {
             fb.balance += ls.amount;
+            addAdjustment(fb, ls.amount, growthYears);
           } else {
+            const before = fb.balance;
             fb.balance = Math.max(0, fb.balance - ls.amount);
+            addAdjustment(fb, fb.balance - before, growthYears);
           }
         }
       }
@@ -629,10 +649,27 @@ export function calculateFireProjections(
         unmetSpend,
       });
 
-      // Grow all fund balances for next year
+      // Grow all fund balances for next year. The pre-existing balance gets a
+      // full year; this year's additions get their pro-rated fraction (drawdown
+      // may have consumed part of them — scale down to what's actually left).
       for (const fb of balances) {
         const rate = config.growthRates[fb.subcategory] / 100;
-        fb.balance *= (1 + rate);
+        const adjustments = yearAdditions.get(fb) ?? [];
+        if (adjustments.length === 0) {
+          fb.balance *= (1 + rate);
+          continue;
+        }
+        let net = adjustments.reduce((s, a) => s + a.amount, 0);
+        let scale = 1;
+        if (net > 0 && fb.balance < net) {
+          scale = fb.balance / net;
+          net = fb.balance;
+        }
+        let next = (fb.balance - net) * (1 + rate);
+        for (const a of adjustments) {
+          next += a.amount * scale * Math.pow(1 + rate, Math.max(0, a.growthYears));
+        }
+        fb.balance = Math.max(0, next);
       }
     }
 
