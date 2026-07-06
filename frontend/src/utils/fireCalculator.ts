@@ -298,6 +298,26 @@ export function findSubYearFireFraction(input: SubYearFireInput): SubYearFireRes
   return { fraction: hi, bindingConstraint: bindingAtLo };
 }
 
+/**
+ * Balance-weighted growth rate (decimal) of a projection row's accessible pot.
+ * Falls back to 0 when the row has no accessible breakdown or no balance.
+ */
+export function accessibleGrowthRateFromRow(
+  row: FireProjection,
+  growthRates: FireConfig['growthRates']
+): number {
+  const b = row.accessibleBreakdown;
+  if (!b) return 0;
+  const total = b.equities + b.bonds + b.cash + b.property;
+  if (total <= 0) return 0;
+  return (
+    (growthRates.equities / 100) * (b.equities / total) +
+    (growthRates.bonds / 100) * (b.bonds / total) +
+    (growthRates.cash / 100) * (b.cash / total) +
+    (growthRates.property / 100) * (b.property / total)
+  );
+}
+
 /** Earliest achievable FIRE age across all withdrawal rates, or null if none is achievable. */
 export function earliestFireAge(fireDates: FireResult['fireDates']): number | null {
   return fireDates.reduce((best, fd) => {

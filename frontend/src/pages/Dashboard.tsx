@@ -1,6 +1,6 @@
 import { useEffect, useState, useMemo, useCallback } from 'react';
 import { getFunds, getSnapshots, getFireConfig } from '../utils/api';
-import { calculateFireProjections, findSubYearFireFraction } from '../utils/fireCalculator';
+import { calculateFireProjections, findSubYearFireFraction, accessibleGrowthRateFromRow } from '../utils/fireCalculator';
 import type { FireBindingConstraint } from '../utils/fireCalculator';
 import { formatPence, formatPenceShort, formatDate } from '../utils/formatters';
 import { calendarDaysUntil, workDaysUntil } from '../utils/workDays';
@@ -109,13 +109,16 @@ export default function Dashboard() {
       const grossUpFactor = fd.grossAnnualSpend && fireRowNetSpend > 0
         ? Math.max(1, fd.grossAnnualSpend / fireRowNetSpend)
         : 1;
+      // Weight the bridge growth rate by the FIRE-year accessible mix, not
+      // today's — drawdown and lump sums shift the composition over time.
+      const rowGrowthRate = accessibleGrowthRateFromRow(fireRow, fireConfig.growthRates);
       const sub = findSubYearFireFraction({
         prevRow,
         fireRow,
         withdrawalRate: lowestRate,
         pensionAccessAge: fireConfig.pensionAccessAge,
         inflationRate: fireConfig.inflationRate,
-        weightedAccessibleGrowthRate: fireResult.weightedAccessibleGrowthRate,
+        weightedAccessibleGrowthRate: fireRow.accessibleBreakdown ? rowGrowthRate : fireResult.weightedAccessibleGrowthRate,
         grossUpFactor,
       });
       fractionalYears = (fireIndex - 1) + sub.fraction;

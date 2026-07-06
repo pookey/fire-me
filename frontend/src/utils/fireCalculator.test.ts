@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { calculateFireProjections, calculateIncomeTax, calculateCGT, findSubYearFireFraction, earliestFireAge } from './fireCalculator';
+import { calculateFireProjections, calculateIncomeTax, calculateCGT, findSubYearFireFraction, earliestFireAge, accessibleGrowthRateFromRow } from './fireCalculator';
 import type { Fund, Snapshot, FireConfig, TaxConfig, FireProjection } from '../types';
 
 // --- Test helpers ---
@@ -1529,6 +1529,32 @@ describe('fireCalculator', () => {
       // …but a 5% tax gross-up needs £787.5k, reached at 0.875.
       const taxed = findSubYearFireFraction({ ...base, grossUpFactor: 1.05 });
       expect(taxed.fraction).toBeCloseTo(0.875, 3);
+    });
+  });
+
+  describe('accessibleGrowthRateFromRow', () => {
+    const growthRates = { equities: 7, bonds: 3, cash: 1, property: 4 };
+
+    it('weights growth by the row accessible mix', () => {
+      const row = {
+        age: 50, year: 2040, accessible: 100000, locked: 0, total: 100000,
+        annualSpend: 30000, statePension: 0, contributions: 0,
+        accessibleBreakdown: { equities: 75000, bonds: 0, cash: 25000, property: 0 },
+      } as FireProjection;
+      // 75% at 7% + 25% at 1% = 5.5%
+      expect(accessibleGrowthRateFromRow(row, growthRates)).toBeCloseTo(0.055, 6);
+    });
+
+    it('returns 0 with no breakdown or empty balances', () => {
+      const bare = {
+        age: 50, year: 2040, accessible: 0, locked: 0, total: 0,
+        annualSpend: 30000, statePension: 0, contributions: 0,
+      } as FireProjection;
+      expect(accessibleGrowthRateFromRow(bare, growthRates)).toBe(0);
+      expect(accessibleGrowthRateFromRow({
+        ...bare,
+        accessibleBreakdown: { equities: 0, bonds: 0, cash: 0, property: 0 },
+      }, growthRates)).toBe(0);
     });
   });
 
