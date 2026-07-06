@@ -1,7 +1,7 @@
 import { useEffect, useState, useMemo } from 'react';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend, ReferenceLine } from 'recharts';
 import { getFunds, getSnapshots, getFireConfig, updateFireConfig, getFireScenarios, createFireScenario, updateFireScenario, deleteFireScenario } from '../utils/api';
-import { calculateFireProjections } from '../utils/fireCalculator';
+import { calculateFireProjections, earliestFireAge as computeEarliestFireAge } from '../utils/fireCalculator';
 import { formatPoundsShort } from '../utils/formatters';
 import WithdrawalRateChart from '../components/charts/WithdrawalRateChart';
 import AssetAllocationChart from '../components/charts/AssetAllocationChart';
@@ -88,12 +88,7 @@ export default function Fire() {
   const earliestFireAge = useMemo(() => {
     if (!result) return null;
     // Show the earliest age at which ANY withdrawal rate is sustainable
-    const earliest = result.fireDates.reduce((best, fd) => {
-      if (fd.age === null) return best;
-      if (best === null) return fd.age;
-      return fd.age < best ? fd.age : best;
-    }, null as number | null);
-    return earliest;
+    return computeEarliestFireAge(result.fireDates);
   }, [result]);
 
   const currentPot = useMemo(() => {
@@ -357,11 +352,7 @@ export default function Fire() {
                       {earliestFireAge ?? '—'}
                     </td>
                     {scenarioResults.map(({ scenario, result: sr }) => {
-                      const sAge = sr.fireDates.reduce((min, fd) => {
-                        if (fd.age === null) return min;
-                        if (min === null) return fd.age;
-                        return fd.age > min ? fd.age : min;
-                      }, null as number | null);
+                      const sAge = computeEarliestFireAge(sr.fireDates);
                       return (
                         <td key={scenario.id} className="text-center font-mono" style={{ color: 'var(--text-primary)' }}>
                           {sAge ?? '—'}

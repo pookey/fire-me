@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { calculateFireProjections, calculateIncomeTax, calculateCGT, findSubYearFireFraction } from './fireCalculator';
+import { calculateFireProjections, calculateIncomeTax, calculateCGT, findSubYearFireFraction, earliestFireAge } from './fireCalculator';
 import type { Fund, Snapshot, FireConfig, TaxConfig, FireProjection } from '../types';
 
 // --- Test helpers ---
@@ -1448,6 +1448,25 @@ describe('fireCalculator', () => {
       });
       expect(result.bindingConstraint).toBe('pot-threshold');
       expect(result.fraction).toBeGreaterThan(0);
+    });
+  });
+
+  describe('earliestFireAge', () => {
+    it('returns the earliest age across withdrawal rates', () => {
+      expect(earliestFireAge([
+        { withdrawalRate: 3, age: 58, year: 2048 },
+        { withdrawalRate: 3.5, age: 55, year: 2045 },
+        { withdrawalRate: 4, age: 52, year: 2042 },
+      ])).toBe(52);
+    });
+
+    it('skips unachievable rates and returns null when none are achievable', () => {
+      expect(earliestFireAge([
+        { withdrawalRate: 3, age: null, year: null },
+        { withdrawalRate: 4, age: 60, year: 2050 },
+      ])).toBe(60);
+      expect(earliestFireAge([{ withdrawalRate: 3, age: null, year: null }])).toBeNull();
+      expect(earliestFireAge([])).toBeNull();
     });
   });
 });

@@ -271,6 +271,15 @@ export function findSubYearFireFraction(input: SubYearFireInput): SubYearFireRes
   return { fraction: hi, bindingConstraint: bindingAtLo };
 }
 
+/** Earliest achievable FIRE age across all withdrawal rates, or null if none is achievable. */
+export function earliestFireAge(fireDates: FireResult['fireDates']): number | null {
+  return fireDates.reduce((best, fd) => {
+    if (fd.age === null) return best;
+    if (best === null) return fd.age;
+    return fd.age < best ? fd.age : best;
+  }, null as number | null);
+}
+
 export function calculateFireProjections(
   funds: Fund[],
   snapshots: Snapshot[],
