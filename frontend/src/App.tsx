@@ -7,6 +7,7 @@ import Dashboard from './pages/Dashboard';
 import DataEntry from './pages/DataEntry';
 import Charts from './pages/Charts';
 import Fire from './pages/Fire';
+import TeachersPension from './pages/TeachersPension';
 import Funds from './pages/Funds';
 import LumpSums from './pages/LumpSums';
 import Income from './pages/Income';
@@ -30,6 +31,7 @@ export default function App() {
           <Route path="/data-entry" element={<DataEntry />} />
           <Route path="/charts" element={<Charts />} />
           <Route path="/fire" element={<Fire />} />
+          <Route path="/teachers-pension" element={<TeachersPension />} />
           <Route path="/funds" element={<Funds />} />
           <Route path="/lump-sums" element={<LumpSums />} />
           <Route path="/income" element={<Income />} />

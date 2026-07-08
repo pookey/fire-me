@@ -436,6 +436,7 @@ select.input-dark {
 }
 
 /* ─── Checkbox override ─── */
-input[type="checkbox"] {
+input[type="checkbox"],
+input[type="radio"] {
   accent-color: var(--gold);
 }
