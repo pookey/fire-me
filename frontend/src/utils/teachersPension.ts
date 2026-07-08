@@ -14,6 +14,11 @@ import {
   CARE_ACTIVE_STANDARD_REDUCTION,
   CARE_LATE_UPLIFT,
   COMMUTATION_RATE,
+  AP_BLOCK,
+  AP_MAX_ANNUAL,
+  AP_COST_PER_250,
+  FASTER_ACCRUAL_COST,
+  INDEX_LINKED_ANNUITY_COST_PER_POUND,
   lookupFactor,
 } from './tpsFactors';
 
@@ -333,5 +338,161 @@ export function computeTpsBenefits(
     totalAnnualPensionReal,
     mcCloudComparison,
     warnings,
+  };
+}
+
+// --- Step 5: decision-support helpers -------------------------------------
+
+export interface ClaimAgeSweepRow {
+  claimAge: number;
+  annualPensionReal: number; // total, post-reduction
+  lumpSumReal: number;
+  cumulativeRealToLifeExpectancy: number;
+}
+
+/**
+ * Runs computeTpsBenefits once per integer claim age from ctx.minPensionAge to
+ * 70 inclusive, overriding claimAge each time. computeTpsBenefits reports
+ * totalLumpSumAtClaim in NOMINAL claim-year £; un-inflate it here so every
+ * field on the row is real (today's £), consistent with annualPensionReal.
+ */
+export function sweepClaimAges(tps: TeachersPensionConfig, ctx: TpsContext): ClaimAgeSweepRow[] {
+  const cpi = ctx.inflationRate / 100;
+  const rows: ClaimAgeSweepRow[] = [];
+  for (let claimAge = ctx.minPensionAge; claimAge <= 70; claimAge++) {
+    const r = computeTpsBenefits({ ...tps, claimAge }, ctx);
+    const lumpSumReal = r.totalLumpSumAtClaim / (1 + cpi) ** (claimAge - ctx.currentAge);
+    rows.push({
+      claimAge,
+      annualPensionReal: r.totalAnnualPensionReal,
+      lumpSumReal,
+      cumulativeRealToLifeExpectancy:
+        lumpSumReal + r.totalAnnualPensionReal * Math.max(0, ctx.lifeExpectancy - claimAge),
+    });
+  }
+  return rows;
+}
+
+function verdictFromCostPerPound(costPerPoundNet: number): 'strong' | 'good' | 'marginal' | 'poor' {
+  if (costPerPoundNet <= 14) return 'strong';
+  if (costPerPoundNet <= 20) return 'good';
+  if (costPerPoundNet <= 26) return 'marginal';
+  return 'poor';
+}
+
+/** Interpolate AP_COST_PER_250 by age for a given scheme NPA; clamp outside 30-65. */
+function apCostPer250(age: number, npa: 65 | 66 | 67 | 68): number {
+  const table = AP_COST_PER_250;
+  if (age <= table[0].age) return table[0].byNpa[npa];
+  if (age >= table[table.length - 1].age) return table[table.length - 1].byNpa[npa];
+  for (let i = 0; i < table.length - 1; i++) {
+    if (age >= table[i].age && age <= table[i + 1].age) {
+      const t = (age - table[i].age) / (table[i + 1].age - table[i].age);
+      return table[i].byNpa[npa] + t * (table[i + 1].byNpa[npa] - table[i].byNpa[npa]);
+    }
+  }
+  return table[table.length - 1].byNpa[npa];
+}
+
+export interface ApValueResult {
+  blocks: number;
+  annualPension: number; // £/yr bought (blocks x 250)
+  grossCost: number;
+  netCost: number; // net of tax relief at marginalTaxRate
+  costPerPoundGross: number;
+  costPerPoundNet: number; // per £1/yr AFTER any early reduction
+  effectivePensionAtClaim: number; // after ER8 if claimAge < npa
+  sippEquivalentCapital: number; // per the user's withdrawal rate
+  annuityEquivalentCost: number; // INDEX_LINKED_ANNUITY_COST_PER_POUND x annualPension
+  verdict: 'strong' | 'good' | 'marginal' | 'poor';
+  caveats: string[];
+}
+
+export function additionalPensionValue(opts: {
+  age: number;
+  npa: 65 | 66 | 67 | 68;
+  annualPension: number; // desired £/yr, must be a £250 block, max £8,600
+  marginalTaxRate: number;
+  claimAge: number;
+  withdrawalRate: number;
+}): ApValueResult {
+  const { age, npa, annualPension, marginalTaxRate, claimAge, withdrawalRate } = opts;
+
+  const blocks = annualPension / AP_BLOCK;
+  if (annualPension <= 0 || Math.abs(blocks - Math.round(blocks)) > 1e-9) {
+    throw new Error(`Additional Pension must be purchased in £${AP_BLOCK}/yr blocks`);
+  }
+  if (annualPension > AP_MAX_ANNUAL) {
+    throw new Error(`Additional Pension cannot exceed £${AP_MAX_ANNUAL}/yr`);
+  }
+
+  const grossCost = blocks * apCostPer250(age, npa);
+  const netCost = grossCost * (1 - marginalTaxRate / 100);
+
+  // ER8 basis, same as computeTpsBenefits' treatment of Additional Pension.
+  const effectivePensionAtClaim = annualPension * lookupFactor(ERF_CARE_DEFERRED_ER8, Math.max(0, npa - claimAge));
+
+  const costPerPoundGross = grossCost / effectivePensionAtClaim;
+  const costPerPoundNet = netCost / effectivePensionAtClaim;
+
+  const caveats: string[] = [
+    'This pension dies with you — no capital passes to dependants unless you separately pay for dependant cover.',
+    'Additional Pension purchases count in full against your £60,000 Annual Allowance in the year you buy them (roughly 16x the pension increase).',
+  ];
+  if (claimAge < npa - 5) {
+    caveats.push('Claiming more than 5 years before your Normal Pension Age erodes the value of Additional Pension badly.');
+  }
+
+  return {
+    blocks,
+    annualPension,
+    grossCost,
+    netCost,
+    costPerPoundGross,
+    costPerPoundNet,
+    effectivePensionAtClaim,
+    sippEquivalentCapital: annualPension / (withdrawalRate / 100),
+    annuityEquivalentCost: INDEX_LINKED_ANNUITY_COST_PER_POUND * annualPension,
+    verdict: verdictFromCostPerPound(costPerPoundNet),
+    caveats,
+  };
+}
+
+export interface FasterAccrualResult {
+  extraContributionPct: number;
+  extraContributionAnnual: number; // £ this year
+  extraPensionEarned: number; // £/yr: salary x (1/denom - 1/57)
+  costPerPoundGross: number;
+  costPerPoundNet: number;
+  verdict: 'strong' | 'good' | 'marginal' | 'poor';
+  caveats: string[];
+}
+
+export function fasterAccrualValue(opts: {
+  salary: number;
+  denominator: 55 | 50 | 45;
+  marginalTaxRate: number;
+}): FasterAccrualResult {
+  const { salary, denominator, marginalTaxRate } = opts;
+
+  const extraContributionPct = FASTER_ACCRUAL_COST[denominator];
+  const extraContributionAnnual = salary * (extraContributionPct / 100);
+  const extraPensionEarned = salary * (1 / denominator - 1 / 57);
+
+  const costPerPoundGross = extraContributionAnnual / extraPensionEarned;
+  const netContribution = extraContributionAnnual * (1 - marginalTaxRate / 100);
+  const costPerPoundNet = netContribution / extraPensionEarned;
+
+  return {
+    extraContributionPct,
+    extraContributionAnnual,
+    extraPensionEarned,
+    costPerPoundGross,
+    costPerPoundNet,
+    verdict: verdictFromCostPerPound(costPerPoundNet),
+    caveats: [
+      'The extra pension dies with you — no capital passes to dependants unless you separately pay for dependant cover.',
+      'Electing faster accrual increases your pensionable growth and counts toward your £60,000 Annual Allowance for the scheme year.',
+    ],
   };
 }

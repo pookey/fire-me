@@ -1,5 +1,11 @@
 import { describe, it, expect } from 'vitest';
-import { computeTpsBenefits, type TpsContext } from './teachersPension';
+import {
+  computeTpsBenefits,
+  sweepClaimAges,
+  additionalPensionValue,
+  fasterAccrualValue,
+  type TpsContext,
+} from './teachersPension';
 import type { TeachersPensionConfig } from '../types';
 
 const CTX: TpsContext = { currentAge: 45, inflationRate: 2.5, lifeExpectancy: 90, minPensionAge: 57 };
@@ -227,5 +233,115 @@ describe('computeTpsBenefits edge cases (no NaN / crash)', () => {
     );
     expect(finite(r.totalAnnualPensionReal)).toBe(true);
     expect(r.totalAnnualPensionReal).toBeGreaterThan(0);
+  });
+});
+
+describe('sweepClaimAges', () => {
+  // CTX: minPensionAge 57 -> rows for claimAge 57..70 inclusive = 14 rows.
+  it('sweeps integer claim ages from minPensionAge to 70', () => {
+    const tps = base({ careerAverage: { accruedAnnualPension: 10000, normalPensionAge: 60 } });
+    const rows = sweepClaimAges(tps, CTX);
+    expect(rows).toHaveLength(14);
+    expect(rows[0].claimAge).toBe(57);
+    expect(rows[rows.length - 1].claimAge).toBe(70);
+
+    // claimAge 57: NPA 60, deferred, yearsEarly = 3 -> ER8(3) = 0.859 -> 8590.
+    const row57 = rows.find((r) => r.claimAge === 57)!;
+    expect(row57.annualPensionReal).toBeCloseTo(10000 * 0.859, 6);
+    expect(row57.lumpSumReal).toBeCloseTo(0, 6);
+    expect(row57.cumulativeRealToLifeExpectancy).toBeCloseTo(10000 * 0.859 * (90 - 57), 4);
+
+    // claimAge 60: at NPA, unreduced -> 10000.
+    const row60 = rows.find((r) => r.claimAge === 60)!;
+    expect(row60.annualPensionReal).toBeCloseTo(10000, 6);
+    expect(row60.cumulativeRealToLifeExpectancy).toBeCloseTo(10000 * (90 - 60), 6);
+
+    // claimAge 70: 10 years past NPA 60 -> late uplift (1.037)^10.
+    const row70 = rows.find((r) => r.claimAge === 70)!;
+    expect(row70.annualPensionReal).toBeCloseTo(10000 * 1.037 ** 10, 6);
+  });
+
+  // Verifies the nominal->real round trip on the lump sum: with no in-service
+  // revaluation (stillInService: false, serviceYears = 0), the real lump sum at
+  // each claim age should equal the accrued £24,000 times only the claim-age
+  // reduction factor, with the nominal conversion/un-conversion cancelling out.
+  it('un-inflates the lump sum back to real terms', () => {
+    const tps = base({ finalSalary: { section: 'npa60', accruedAnnualPension: 8000, automaticLumpSum: 24000 } });
+    const rows = sweepClaimAges(tps, CTX);
+
+    const row60 = rows.find((r) => r.claimAge === 60)!;
+    expect(row60.lumpSumReal).toBeCloseTo(24000, 4);
+
+    // claimAge 57: yearsEarly = 3 -> ERF_NPA60_LUMPSUM(3) = 0.938.
+    const row57 = rows.find((r) => r.claimAge === 57)!;
+    expect(row57.lumpSumReal).toBeCloseTo(24000 * 0.938, 4);
+  });
+});
+
+describe('additionalPensionValue', () => {
+  // Age 50, NPA 67: AP_COST_PER_250 row for age 50 is an exact table row
+  // (no interpolation needed), byNpa[67] = 3610. blocks = 1000/250 = 4.
+  // grossCost = 4 x 3610 = 14440. netCost @ 40% relief = 14440 x 0.6 = 8664.
+  it('claim at NPA: strong verdict, no early-claim caveat', () => {
+    const r = additionalPensionValue({
+      age: 50, npa: 67, annualPension: 1000, marginalTaxRate: 40, claimAge: 67, withdrawalRate: 4,
+    });
+    expect(r.blocks).toBe(4);
+    expect(r.grossCost).toBeCloseTo(14440, 6);
+    expect(r.netCost).toBeCloseTo(8664, 6);
+    // claimAge === npa -> yearsEarly = 0 -> no reduction.
+    expect(r.effectivePensionAtClaim).toBeCloseTo(1000, 6);
+    // costPerPoundNet = 8664 / 1000 = 8.664 -> 'strong' (<= 14).
+    expect(r.costPerPoundNet).toBeCloseTo(8.664, 3);
+    expect(r.verdict).toBe('strong');
+    expect(r.caveats.some((c) => c.includes('before your Normal Pension Age'))).toBe(false);
+  });
+
+  // Same purchase, claim 9 years early (58 vs NPA 67).
+  // ER8(9): interpolate between 7 -> 0.716 and 10 -> 0.632:
+  //   t = (9-7)/(10-7) = 2/3; factor = 0.716 + (2/3) x (0.632 - 0.716) = 0.716 - 0.056 = 0.660.
+  // effectivePensionAtClaim = 1000 x 0.660 = 660.
+  // costPerPoundNet = 8664 / 660 = 13.1272... -> still 'strong' (<= 14), but claimAge(58) < npa-5(62)
+  // so the early-claim caveat must be present.
+  it('claim 9 years early: still strong but early-claim caveat present', () => {
+    const r = additionalPensionValue({
+      age: 50, npa: 67, annualPension: 1000, marginalTaxRate: 40, claimAge: 58, withdrawalRate: 4,
+    });
+    const er8At9 = 0.716 + (2 / 3) * (0.632 - 0.716);
+    expect(r.effectivePensionAtClaim).toBeCloseTo(1000 * er8At9, 6);
+    expect(r.effectivePensionAtClaim).toBeCloseTo(660, 1);
+    expect(r.costPerPoundNet).toBeCloseTo(8664 / (1000 * er8At9), 4);
+    expect(r.costPerPoundNet).toBeCloseTo(13.127, 2);
+    expect(r.verdict).toBe('strong');
+    expect(r.caveats.some((c) => c.includes('before your Normal Pension Age'))).toBe(true);
+  });
+
+  it('validates £250 blocks and the £8,600 max', () => {
+    expect(() =>
+      additionalPensionValue({ age: 50, npa: 67, annualPension: 900, marginalTaxRate: 40, claimAge: 67, withdrawalRate: 4 }),
+    ).toThrow();
+    expect(() =>
+      additionalPensionValue({ age: 50, npa: 67, annualPension: 9000, marginalTaxRate: 40, claimAge: 67, withdrawalRate: 4 }),
+    ).toThrow();
+  });
+});
+
+describe('fasterAccrualValue', () => {
+  // 1/50 on £50,000: FASTER_ACCRUAL_COST[50] = 4.8% -> extraContributionAnnual = 50000 x 0.048 = 2400.
+  // extraPensionEarned = 50000 x (1/50 - 1/57) = 50000 x 0.00245614... = 122.807017...
+  // costPerPoundGross = 2400 / 122.807017 = 19.5429... ~19.5.
+  // net @ 20% relief = 2400 x 0.8 = 1920; costPerPoundNet = 1920 / 122.807017 = 15.634... ~15.6 -> 'good'.
+  it('1/50 on £50,000: good verdict', () => {
+    const r = fasterAccrualValue({ salary: 50000, denominator: 50, marginalTaxRate: 20 });
+    const extraPension = 50000 * (1 / 50 - 1 / 57);
+    expect(r.extraContributionPct).toBe(4.8);
+    expect(r.extraContributionAnnual).toBeCloseTo(2400, 6);
+    expect(r.extraPensionEarned).toBeCloseTo(extraPension, 6);
+    expect(r.extraPensionEarned).toBeCloseTo(122.807, 2);
+    expect(r.costPerPoundGross).toBeCloseTo(2400 / extraPension, 6);
+    expect(r.costPerPoundGross).toBeCloseTo(19.54, 1);
+    expect(r.costPerPoundNet).toBeCloseTo((2400 * 0.8) / extraPension, 6);
+    expect(r.costPerPoundNet).toBeCloseTo(15.63, 1);
+    expect(r.verdict).toBe('good');
   });
 });
