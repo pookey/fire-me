@@ -53,6 +53,44 @@ export interface DefinedBenefitPension {
   inflationCap?: number; // max annual increase %, e.g. 2.5 or 5
 }
 
+export type TpsFsSection = 'npa60' | 'npa65';
+export type TpsMcCloudChoice = 'finalSalary' | 'careerAverage' | 'auto';
+
+/** UK Teachers' Pension Scheme. All amounts £/yr at the statement date unless noted. */
+export interface TeachersPensionConfig {
+  enabled: boolean;
+  statementDate: string; // 'YYYY-MM' the benefit-statement figures are valid at
+
+  finalSalary?: {
+    section: TpsFsSection;
+    accruedAnnualPension: number;
+    automaticLumpSum?: number; // £, NPA60 only (~3x pension)
+  };
+  careerAverage?: {
+    accruedAnnualPension: number; // already revalued to statement date
+    normalPensionAge: number; // max(65, SPA) — user-entered, e.g. 68
+  };
+  /** Remediable Service Statement dual figures for 2015-2022 remedy service */
+  mcCloud?: {
+    finalSalaryAnnualPension: number;
+    finalSalaryLumpSum?: number; // if legacy section is NPA60
+    careAnnualPension: number;
+    choice: TpsMcCloudChoice; // 'auto' = engine picks the better branch at claim age
+  };
+  additionalPensionAccrued?: number; // £/yr already purchased (CPI-only revaluation)
+
+  stillInService: boolean;
+  futureAccrual?: {
+    currentSalary: number; // £/yr pensionable
+    leavingAge: number; // age accrual stops
+    salaryGrowthRate?: number; // %/yr, default config.inflationRate
+    accrualDenominator?: 57 | 55 | 50 | 45; // faster-accrual election
+  };
+
+  claimAge: number;
+  commutedPension?: number; // £/yr given up for lump sum at £12 per £1
+}
+
 export type IncomeType = 'salary' | 'side_income' | 'rental' | 'other';
 
 export interface Income {
@@ -89,6 +127,7 @@ export interface FireConfig {
   drawdownOrder?: TaxWrapper[];
   taxConfig?: TaxConfig;
   definedBenefitPensions?: DefinedBenefitPension[];
+  teachersPension?: TeachersPensionConfig;
   lumpSumAllowance?: number; // default 268275 (£) - 25% tax-free from SIPP
   statePensionInflationLinked?: boolean; // default true — grow with inflation
   targetRetirementAge?: number;
