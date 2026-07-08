@@ -1161,6 +1161,31 @@ describe('fireCalculator', () => {
       expect(p0.guaranteedIncomeTax).toBe(3486);
       expect(p0.accessible - p1.accessible).toBe(13486);
     });
+
+    it('does not double-count guaranteed income tax in the FIRE date pot requirement', () => {
+      const funds = [makeFund({ subcategory: 'equities', wrapper: 'isa' })];
+      const snapshots = [makeSnapshot({ value: 350000 })];
+      const config = makeConfig({
+        dateOfBirth: '1966-01-01', // age 60
+        pensionAccessAge: 57,
+        targetAnnualSpend: 40000,
+        growthRates: { equities: 0, bonds: 0, cash: 0, property: 0 },
+        inflationRate: 0,
+        statePensionAmount: 0,
+        statePensionAge: 99,
+        withdrawalRates: [4],
+        definedBenefitPensions: [
+          { name: 'Teacher Pension', annualAmount: 30000, startAge: 60 },
+        ],
+      });
+      const result = calculateFireProjections(funds, snapshots, config);
+
+      // netSpend = 13486 (see above); ISA drawdown is tax-free so the pot's
+      // requirement at 4% is 13486 / 0.04 = 337,150. Double-counting the
+      // £3,486 guaranteed-income tax would demand 424,300 and defer FIRE.
+      expect(result.fireDates[0].age).toBe(60);
+      expect(result.fireDates[0].grossAnnualSpend).toBe(13486);
+    });
   });
 
   describe('pension 25% tax-free lump sum (per-fund)', () => {

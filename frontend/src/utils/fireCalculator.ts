@@ -69,6 +69,8 @@ interface SimYearStats {
   total: number;
   annualSpend: number;
   guaranteedIncome: number;
+  /** Included in taxPaid AND reflected in netSpend — subtract once when summing them. */
+  guaranteedIncomeTax: number;
   netSpend: number;
   taxPaid: number;
   /** Net spend the drawdown could not cover this year (0 when not drawing down). */
@@ -648,6 +650,7 @@ export function calculateFireProjections(
         total,
         annualSpend,
         guaranteedIncome,
+        guaranteedIncomeTax,
         netSpend,
         taxPaid: yearTaxPaid,
         unmetSpend,
@@ -708,8 +711,10 @@ export function calculateFireProjections(
     }
     return statAt(Math.min(Math.max(retireAge, fullAccessAge), endAge));
   };
+  // netSpend already includes guaranteedIncomeTax, and so does taxPaid —
+  // subtract it once so the pot isn't charged for it twice.
   const sustainsRate = (s: SimYearStats, rate: number): boolean =>
-    s.netSpend <= 0 || s.accessible >= (s.netSpend + s.taxPaid) / (rate / 100);
+    s.netSpend <= 0 || s.accessible >= (s.netSpend + s.taxPaid - s.guaranteedIncomeTax) / (rate / 100);
 
   const fireDateByRate = new Map<number, { age: number; year: number; grossAnnualSpend: number }>();
   for (let candidate = currentAge; candidate <= endAge; candidate++) {
@@ -721,7 +726,7 @@ export function calculateFireProjections(
     const s = assessRetirementAt(stats, candidate);
     if (!s) continue;
 
-    const grossSpend = s.netSpend + s.taxPaid;
+    const grossSpend = s.netSpend + s.taxPaid - s.guaranteedIncomeTax;
     for (const rate of config.withdrawalRates) {
       if (fireDateByRate.has(rate)) continue;
       if (sustainsRate(s, rate)) {
