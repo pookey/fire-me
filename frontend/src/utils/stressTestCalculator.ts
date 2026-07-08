@@ -140,7 +140,7 @@ export function runStressTest(
   const projection = result.projections.find(p => p.age === retirementAge);
   const startingPot = projection?.accessible ?? 0;
 
-  const guaranteedIncome = (projection?.statePension ?? 0) + (projection?.definedBenefitIncome ?? 0);
+  const guaranteedIncome = (projection?.statePension ?? 0) + (projection?.definedBenefitIncome ?? 0) - (projection?.guaranteedIncomeTax ?? 0);
   const startingSpend = Math.max(0, (projection?.annualSpend ?? 0) - guaranteedIncome);
 
   const baseGrowthRate = getWeightedAccessibleGrowthRate(funds, snapshots, config);

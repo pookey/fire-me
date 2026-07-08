@@ -239,7 +239,8 @@ export function findSubYearFireFraction(input: SubYearFireInput): SubYearFireRes
     const annualSpend = lerp(prevRow.annualSpend, fireRow.annualSpend, f);
     const statePension = lerp(prevRow.statePension, fireRow.statePension, f);
     const dbIncome = lerp(prevRow.definedBenefitIncome ?? 0, fireRow.definedBenefitIncome ?? 0, f);
-    const guaranteed = statePension + dbIncome;
+    const guaranteedIncomeTax = lerp(prevRow.guaranteedIncomeTax ?? 0, fireRow.guaranteedIncomeTax ?? 0, f);
+    const guaranteed = statePension + dbIncome - guaranteedIncomeTax;
     const netSpendBeforeTax = annualSpend - guaranteed;
 
     if (netSpendBeforeTax <= 0) return { satisfied: true, binding: 'none' };
@@ -527,8 +528,9 @@ export function calculateFireProjections(
 
       // Drawdown logic — group accessible funds by wrapper, withdraw in drawdownOrder
       const guaranteedIncome = statePension + dbIncome;
-      const netSpend = annualSpend - guaranteedIncome;
-      let yearTaxPaid = 0;
+      const guaranteedIncomeTax = calculateIncomeTax(guaranteedIncome, taxConfig);
+      const netSpend = annualSpend - (guaranteedIncome - guaranteedIncomeTax);
+      let yearTaxPaid = guaranteedIncomeTax;
       let yearGrossWithdrawal = 0;
       let unmetSpend = 0;
       const yearDrawdownByWrapper: Record<string, number> = { isa: 0, lisa: 0, sipp: 0, gia: 0, none: 0 };
@@ -636,6 +638,7 @@ export function calculateFireProjections(
         projection.drawdownSipp = Math.round(yearDrawdownByWrapper.sipp);
         projection.drawdownGia = Math.round(yearDrawdownByWrapper.gia);
         projection.guaranteedIncome = Math.round(guaranteedIncome);
+        projection.guaranteedIncomeTax = Math.round(guaranteedIncomeTax);
         rows.push(projection);
       }
 
@@ -794,7 +797,7 @@ export function calculateFireProjections(
   if (config.targetRetirementAge) {
     const targetProjection = projections.find(p => p.age === config.targetRetirementAge);
     if (targetProjection) {
-      const gi = targetProjection.statePension + (targetProjection.definedBenefitIncome ?? 0);
+      const gi = targetProjection.statePension + (targetProjection.definedBenefitIncome ?? 0) - (targetProjection.guaranteedIncomeTax ?? 0);
       const ns = targetProjection.annualSpend - gi;
       const requiredPot = ns > 0 ? ns / (lowestWithdrawalRate / 100) : 0;
 
@@ -804,7 +807,7 @@ export function calculateFireProjections(
       // locked means you can't actually fund spending.
       const projsFromTarget = projections.filter(p => p.age >= config.targetRetirementAge!);
       const depletionYear = projsFromTarget.find(p => {
-        const guaranteed = p.statePension + (p.definedBenefitIncome ?? 0);
+        const guaranteed = p.statePension + (p.definedBenefitIncome ?? 0) - (p.guaranteedIncomeTax ?? 0);
         const netSpendNeeded = p.annualSpend - guaranteed;
         return p.accessible <= 0 && netSpendNeeded > 0;
       });
@@ -813,7 +816,7 @@ export function calculateFireProjections(
       // Shortfall: estimate how much extra annual income is needed at depletion
       let shortfallPerYear = 0;
       if (depletionYear) {
-        const guaranteed = depletionYear.statePension + (depletionYear.definedBenefitIncome ?? 0);
+        const guaranteed = depletionYear.statePension + (depletionYear.definedBenefitIncome ?? 0) - (depletionYear.guaranteedIncomeTax ?? 0);
         shortfallPerYear = depletionYear.annualSpend - guaranteed;
       }
 

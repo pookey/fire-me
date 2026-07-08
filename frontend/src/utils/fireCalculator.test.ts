@@ -1092,6 +1092,75 @@ describe('fireCalculator', () => {
       expect(decrease).toBeGreaterThanOrEqual(20000);
       expect(decrease).toBeLessThan(30000);
     });
+
+    it('taxes guaranteed income once it exceeds the personal allowance', () => {
+      const funds = [makeFund({ subcategory: 'equities' })];
+      const snapshots = [makeSnapshot({ value: 1000000 })];
+      const config = makeConfig({
+        dateOfBirth: '1966-01-01', // age 60
+        pensionAccessAge: 57,
+        growthRates: { equities: 0, bonds: 0, cash: 0, property: 0 },
+        inflationRate: 0,
+        statePensionAmount: 0,
+        statePensionAge: 99,
+        withdrawalRates: [4],
+        definedBenefitPensions: [
+          { name: 'Teacher Pension', annualAmount: 30000, startAge: 60 },
+        ],
+      });
+      const result = calculateFireProjections(funds, snapshots, config);
+
+      // Default tax config: personalAllowance 12570, basicRate 20%.
+      // (30000 - 12570) * 0.20 = 3486
+      const age60 = result.projections.find(p => p.age === 60)!;
+      expect(age60.guaranteedIncomeTax).toBe(3486);
+    });
+
+    it('does not tax guaranteed income within the personal allowance', () => {
+      const funds = [makeFund({ subcategory: 'equities' })];
+      const snapshots = [makeSnapshot({ value: 100000 })];
+      const config = makeConfig({
+        dateOfBirth: '1966-01-01', // age 60
+        pensionAccessAge: 57,
+        statePensionAmount: 0,
+        statePensionAge: 99,
+        definedBenefitPensions: [
+          { name: 'Small DB', annualAmount: 10000, startAge: 60 },
+        ],
+      });
+      const result = calculateFireProjections(funds, snapshots, config);
+
+      // 10,000 is entirely within the £12,570 personal allowance.
+      const age60 = result.projections.find(p => p.age === 60)!;
+      expect(age60.guaranteedIncomeTax).toBe(0);
+    });
+
+    it('grosses up drawdown by the tax on guaranteed income', () => {
+      const funds = [makeFund({ subcategory: 'equities', wrapper: 'isa' })];
+      const snapshots = [makeSnapshot({ value: 1000000 })];
+      const config = makeConfig({
+        dateOfBirth: '1966-01-01', // age 60
+        pensionAccessAge: 57,
+        targetAnnualSpend: 40000,
+        growthRates: { equities: 0, bonds: 0, cash: 0, property: 0 },
+        inflationRate: 0,
+        statePensionAmount: 0,
+        statePensionAge: 99,
+        withdrawalRates: [4],
+        definedBenefitPensions: [
+          { name: 'Teacher Pension', annualAmount: 30000, startAge: 60 },
+        ],
+      });
+      const result = calculateFireProjections(funds, snapshots, config);
+
+      // guaranteedIncomeTax = (30000 - 12570) * 0.20 = 3486
+      // netSpend = 40000 - (30000 - 3486) = 13486 (pre-fix this was 10000)
+      // ISA withdrawal is tax-free, so accessible falls by exactly netSpend.
+      const p0 = result.projections[0];
+      const p1 = result.projections[1];
+      expect(p0.guaranteedIncomeTax).toBe(3486);
+      expect(p0.accessible - p1.accessible).toBe(13486);
+    });
   });
 
   describe('pension 25% tax-free lump sum (per-fund)', () => {

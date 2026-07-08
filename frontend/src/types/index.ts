@@ -127,6 +127,7 @@ export interface FireProjection {
   drawdownSipp?: number;
   drawdownGia?: number;
   guaranteedIncome?: number;
+  guaranteedIncomeTax?: number; // income tax on statePension + definedBenefitIncome
   accessibleBreakdown?: AssetBreakdown;
   lockedBreakdown?: AssetBreakdown;
 }
