@@ -10,6 +10,7 @@ import WrapperDrawdownChart from '../components/charts/WrapperDrawdownChart';
 import ProjectionTable from '../components/charts/ProjectionTable';
 import StressTestPanel from '../components/charts/StressTestPanel';
 import { runStressTest, DEFAULT_STRESS_SCENARIOS } from '../utils/stressTestCalculator';
+import { ConfigSection, Field } from '../components/ConfigSection';
 import type { Fund, Snapshot, FireConfig, FireResult, FireScenario, TaxConfig, StressScenarioConfig } from '../types';
 
 const SCENARIO_COLORS = ['#f97316', '#14b8a6', '#ec4899', '#84cc16', '#a855f7'];
@@ -929,37 +930,6 @@ export default function Fire() {
           {saving ? 'Saving...' : 'Save Config'}
         </button>
       </div>
-    </div>
-  );
-}
-
-function Field({ label, children }: { label: string; children: React.ReactNode }) {
-  return (
-    <div>
-      <label className="block text-[0.65rem] font-medium uppercase tracking-wider mb-1" style={{ color: 'var(--text-tertiary)' }}>{label}</label>
-      {children}
-    </div>
-  );
-}
-
-function ConfigSection({ title, isOpen, onToggle, children }: { title: string; isOpen: boolean; onToggle: () => void; children: React.ReactNode }) {
-  return (
-    <div className="card overflow-hidden">
-      <button
-        onClick={onToggle}
-        className="w-full flex items-center justify-between p-4 text-left"
-        style={{ color: 'var(--text-primary)' }}
-      >
-        <span className="font-display text-sm font-semibold">{title}</span>
-        <span className="text-xs transition-transform" style={{ color: 'var(--text-muted)', transform: isOpen ? 'rotate(180deg)' : 'rotate(0deg)' }}>
-          ▼
-        </span>
-      </button>
-      {isOpen && (
-        <div className="px-5 pb-5 space-y-3">
-          {children}
-        </div>
-      )}
     </div>
   );
 }
