@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { calculateFireProjections, calculateIncomeTax, calculateCGT, findSubYearFireFraction, earliestFireAge, accessibleGrowthRateFromRow } from './fireCalculator';
-import type { Fund, Snapshot, FireConfig, TaxConfig, FireProjection } from '../types';
+import type { Fund, Snapshot, FireConfig, TaxConfig, FireProjection, TeachersPensionConfig } from '../types';
 
 // --- Test helpers ---
 
@@ -1185,6 +1185,172 @@ describe('fireCalculator', () => {
       // £3,486 guaranteed-income tax would demand 424,300 and defer FIRE.
       expect(result.fireDates[0].age).toBe(60);
       expect(result.fireDates[0].grossAnnualSpend).toBe(13486);
+    });
+  });
+
+  describe('teachers pension', () => {
+    it('provides CARE income from claim age, nominal-converted and taxed', () => {
+      const funds = [makeFund({ subcategory: 'equities' })];
+      const snapshots = [makeSnapshot({ value: 50000 })];
+      const config = makeConfig({
+        dateOfBirth: '1990-01-01', // currentAge = 2026 - 1990 = 36
+        inflationRate: 2.5,
+        statePensionAmount: 0,
+        statePensionAge: 99,
+        teachersPension: {
+          enabled: true,
+          statementDate: '2026-01',
+          careerAverage: { accruedAnnualPension: 10000, normalPensionAge: 68 },
+          stillInService: false,
+          claimAge: 68,
+        },
+      });
+      const result = calculateFireProjections(funds, snapshots, config);
+
+      const age67 = result.projections.find(p => p.age === 67)!;
+      expect(age67.definedBenefitIncome).toBe(0);
+
+      // Deferred CARE, claiming exactly at its NPA (68): no ER8 reduction, so
+      // the real £10,000 passes straight through, converted to nominal at the
+      // claim year: 10000 x 1.025^(68-36) = 10000 x 1.025^32 ~= 22,037.57.
+      const age68 = result.projections.find(p => p.age === 68)!;
+      const expectedNominal = Math.round(10000 * Math.pow(1.025, 68 - 36));
+      expect(age68.definedBenefitIncome).toBe(expectedNominal);
+
+      // ~£22,038 comfortably exceeds the £12,570 personal allowance.
+      expect(age68.guaranteedIncomeTax).toBeGreaterThan(0);
+    });
+
+    it('adds an NPA60 automatic lump sum to accessible assets in the claim year', () => {
+      const funds = [makeFund({ subcategory: 'cash' })];
+      const snapshots = [makeSnapshot({ value: 100000 })];
+      const config = makeConfig({
+        dateOfBirth: '1990-01-01', // currentAge = 36
+        targetAnnualSpend: 0, // isolate the lump-sum jump from drawdown noise
+        growthRates: { equities: 0, bonds: 0, cash: 0, property: 0 },
+        inflationRate: 0,
+        statePensionAmount: 0,
+        statePensionAge: 99,
+        teachersPension: {
+          enabled: true,
+          statementDate: '2026-01',
+          finalSalary: { section: 'npa60', accruedAnnualPension: 8000, automaticLumpSum: 24000 },
+          stillInService: false,
+          claimAge: 60,
+        },
+      });
+      const result = calculateFireProjections(funds, snapshots, config);
+
+      // NPA60 claimed exactly at 60: no reduction (factor 1.0), 0% inflation
+      // so nominal = real = £24,000. With 0% growth and 0 spend the main fund
+      // is flat, so the whole jump is the synthetic lump-sum fund landing.
+      const age59 = result.projections.find(p => p.age === 59)!;
+      const age60 = result.projections.find(p => p.age === 60)!;
+      expect(age60.accessible - age59.accessible).toBe(24000);
+    });
+
+    it('brings FIRE age forward (or leaves it unchanged) versus TPS disabled', () => {
+      const funds = [makeFund({ subcategory: 'equities' })];
+      const snapshots = [makeSnapshot({ value: 400000 })];
+      const shared: Partial<FireConfig> = {
+        dateOfBirth: '1990-01-01', // currentAge = 36
+        targetAnnualSpend: 30000,
+        growthRates: { equities: 5, bonds: 5, cash: 5, property: 5 },
+        inflationRate: 0,
+        statePensionAmount: 0,
+        statePensionAge: 99,
+        withdrawalRates: [4],
+      };
+
+      const withoutTps = makeConfig(shared);
+      const withTps = makeConfig({
+        ...shared,
+        teachersPension: {
+          enabled: true,
+          statementDate: '2026-01',
+          careerAverage: { accruedAnnualPension: 15000, normalPensionAge: 68 },
+          stillInService: false,
+          claimAge: 45,
+        },
+      });
+
+      const resultWithout = calculateFireProjections(funds, snapshots, withoutTps);
+      const resultWith = calculateFireProjections(funds, snapshots, withTps);
+
+      const ageWithout = resultWithout.fireDates[0].age;
+      const ageWith = resultWith.fireDates[0].age;
+      expect(ageWithout).not.toBeNull();
+      expect(ageWith).not.toBeNull();
+      expect(ageWith as number).toBeLessThanOrEqual(ageWithout as number);
+    });
+
+    it('McCloud finalSalary vs careerAverage choice produce different DB income at claim age', () => {
+      const funds = [makeFund({ subcategory: 'equities' })];
+      const snapshots = [makeSnapshot({ value: 50000 })];
+      const baseTps: TeachersPensionConfig = {
+        enabled: true,
+        statementDate: '2026-01',
+        finalSalary: { section: 'npa60', accruedAnnualPension: 0 },
+        careerAverage: { accruedAnnualPension: 0, normalPensionAge: 68 },
+        mcCloud: {
+          finalSalaryAnnualPension: 3500,
+          finalSalaryLumpSum: 10500,
+          careAnnualPension: 4200,
+          choice: 'finalSalary',
+        },
+        stillInService: false,
+        claimAge: 60,
+      };
+      const commonOverrides: Partial<FireConfig> = {
+        dateOfBirth: '1990-01-01', // currentAge = 36
+        inflationRate: 0,
+        statePensionAmount: 0,
+        statePensionAge: 99,
+      };
+
+      const configFs = makeConfig({ ...commonOverrides, teachersPension: baseTps });
+      const configCare = makeConfig({
+        ...commonOverrides,
+        teachersPension: { ...baseTps, mcCloud: { ...baseTps.mcCloud!, choice: 'careerAverage' } },
+      });
+
+      const resultFs = calculateFireProjections(funds, snapshots, configFs);
+      const resultCare = calculateFireProjections(funds, snapshots, configCare);
+
+      const age60Fs = resultFs.projections.find(p => p.age === 60)!;
+      const age60Care = resultCare.projections.find(p => p.age === 60)!;
+
+      expect(age60Fs.definedBenefitIncome).not.toBe(age60Care.definedBenefitIncome);
+
+      // Final salary (NPA60), claimed exactly at 60: unreduced -> £3,500.
+      expect(age60Fs.definedBenefitIncome).toBe(3500);
+      // Career average, deferred, NPA 68 claimed at 60 (8 years early):
+      // ER8(8) interpolates between 7->0.716 and 10->0.632:
+      // 0.716 + (8-7)/(10-7) * (0.632-0.716) = 0.716 - 0.028 = 0.688
+      // 4200 x 0.688 = 2,889.6 -> rounds to 2,890.
+      expect(age60Care.definedBenefitIncome).toBe(2890);
+    });
+
+    it('disabled teachersPension leaves projections identical to no field at all', () => {
+      const funds = [makeFund({ subcategory: 'equities' })];
+      const snapshots = [makeSnapshot({ value: 200000 })];
+      const configA = makeConfig({ dateOfBirth: '1990-01-01' });
+      const configB = makeConfig({
+        dateOfBirth: '1990-01-01',
+        teachersPension: {
+          enabled: false,
+          statementDate: '2026-01',
+          careerAverage: { accruedAnnualPension: 10000, normalPensionAge: 68 },
+          stillInService: false,
+          claimAge: 60,
+        },
+      });
+
+      const resultA = calculateFireProjections(funds, snapshots, configA);
+      const resultB = calculateFireProjections(funds, snapshots, configB);
+
+      expect(resultB.projections.slice(0, 10)).toEqual(resultA.projections.slice(0, 10));
+      expect(resultB.fireDates).toEqual(resultA.fireDates);
     });
   });
 

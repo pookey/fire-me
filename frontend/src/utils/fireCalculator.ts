@@ -1,4 +1,6 @@
-import type { Fund, Snapshot, FireConfig, FireProjection, FireResult, LumpSum, TaxConfig, TaxWrapper } from '../types';
+import type { Fund, Snapshot, FireConfig, FireProjection, FireResult, LumpSum, TaxConfig, TaxWrapper, DefinedBenefitPension } from '../types';
+import { computeTpsBenefits } from './teachersPension';
+import { minPensionAge } from './tpsFactors';
 
 export type FireBindingConstraint = 'pot-threshold' | 'bridge-check' | 'none';
 
@@ -343,7 +345,7 @@ export function calculateFireProjections(
   const showRealTerms = config.showRealTerms ?? false;
   const taxConfig = config.taxConfig ?? DEFAULT_TAX_CONFIG;
   const drawdownOrder = config.drawdownOrder ?? DEFAULT_DRAWDOWN_ORDER;
-  const definedBenefitPensions = config.definedBenefitPensions ?? [];
+  const definedBenefitPensions: DefinedBenefitPension[] = [...(config.definedBenefitPensions ?? [])];
   const lumpSumAllowance = config.lumpSumAllowance ?? DEFAULT_LUMP_SUM_ALLOWANCE;
 
   // Build fund map and initialize per-fund balances from latest snapshots
@@ -371,6 +373,50 @@ export function calculateFireProjections(
       lumpSums: fund.lumpSums ?? [],
       balance: snapshot.value,
     });
+  }
+
+  // Teachers' Pension: lower the computed streams into the generic DB-pension
+  // list and, if there's a tax-free lump sum, a synthetic accessible fund —
+  // both added to the TEMPLATE (fundBalances/definedBenefitPensions) so every
+  // simulation probe (FIRE-date search, Coast FIRE) copies them, not just the
+  // main projection.
+  const tps = config.teachersPension;
+  if (tps?.enabled) {
+    const tpsBenefits = computeTpsBenefits(tps, {
+      currentAge,
+      inflationRate: config.inflationRate,
+      lifeExpectancy: config.lifeExpectancy ?? 100,
+      minPensionAge: minPensionAge(config.dateOfBirth),
+    });
+    for (const s of tpsBenefits.streams) {
+      definedBenefitPensions.push({
+        name: s.label,
+        annualAmount: s.annualPensionAtClaim,
+        startAge: s.startAge,
+        inflationLinked: true,
+      });
+    }
+    if (tpsBenefits.totalLumpSumAtClaim > 0) {
+      const claimYear = currentYear + Math.round(tps.claimAge - currentAge);
+      fundBalances.push({
+        fundId: '__tps_lumpsum',
+        wrapper: 'gia',
+        subcategory: 'cash',
+        drawdownAge: currentAge,
+        monthlyContribution: 0,
+        contributionStartAge: currentAge,
+        contributionEndAge: endAge,
+        take25PctLumpSum: false,
+        lumpSums: [{
+          type: 'inflow',
+          amount: tpsBenefits.totalLumpSumAtClaim,
+          date: `${claimYear}-04`,
+          description: 'TPS lump sum',
+          active: true,
+        }],
+        balance: 0,
+      });
+    }
   }
 
   // Compute weighted growth rate for accessible funds before the projection loop
