@@ -1,6 +1,13 @@
 import { useEffect, useState, useMemo } from 'react';
-import { getFireConfig, updateFireConfig } from '../utils/api';
-import { computeTpsBenefits } from '../utils/teachersPension';
+import { getFireConfig, updateFireConfig, createFireScenario } from '../utils/api';
+import {
+  computeTpsBenefits,
+  sweepClaimAges,
+  additionalPensionValue,
+  fasterAccrualValue,
+  type ApValueResult,
+  type FasterAccrualResult,
+} from '../utils/teachersPension';
 import {
   minPensionAge,
   memberContributionRate,
@@ -11,8 +18,11 @@ import {
   CARE_ACTIVE_STANDARD_REDUCTION,
   CARE_LATE_UPLIFT,
   COMMUTATION_RATE,
+  AP_BLOCK,
+  AP_MAX_ANNUAL,
 } from '../utils/tpsFactors';
 import { ConfigSection, Field } from '../components/ConfigSection';
+import ClaimAgeSweepChart, { type NpaMarker } from '../components/charts/ClaimAgeSweepChart';
 import { formatPoundsShort } from '../utils/formatters';
 import type { FireConfig, TeachersPensionConfig, TpsFsSection, TpsMcCloudChoice } from '../types';
 
@@ -119,6 +129,43 @@ function apReductionPct(claimAge: number, careNpa: number): number {
   return (1 - factor) * 100;
 }
 
+const VERDICT_STYLE: Record<'strong' | 'good' | 'marginal' | 'poor', { background: string; border: string; color: string }> = {
+  strong: { background: 'rgba(16, 185, 129, 0.15)', border: '1px solid rgba(16, 185, 129, 0.3)', color: '#10b981' },
+  good: { background: 'rgba(45, 212, 191, 0.15)', border: '1px solid rgba(45, 212, 191, 0.3)', color: 'var(--teal-bright)' },
+  marginal: { background: 'rgba(245, 158, 11, 0.15)', border: '1px solid rgba(245, 158, 11, 0.3)', color: '#f59e0b' },
+  poor: { background: 'rgba(239, 68, 68, 0.15)', border: '1px solid rgba(239, 68, 68, 0.3)', color: 'var(--negative)' },
+};
+
+function VerdictBadge({ verdict }: { verdict: 'strong' | 'good' | 'marginal' | 'poor' }) {
+  const style = VERDICT_STYLE[verdict];
+  return (
+    <span
+      className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[0.65rem] font-medium uppercase tracking-wider"
+      style={{ background: style.background, border: style.border, color: style.color }}
+    >
+      {verdict}
+    </span>
+  );
+}
+
+function StatRow({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="flex items-center justify-between gap-3">
+      <span style={{ color: 'var(--text-secondary)' }}>{label}</span>
+      <span className="font-mono text-right" style={{ color: 'var(--text-primary)' }}>{value}</span>
+    </div>
+  );
+}
+
+const WHEN_NOT_TO_BUY = [
+  'Claiming early crushes the value: actuarial reductions (ER8) of 30–45% on purchased pension are common if you claim more than 5–10 years before your Normal Pension Age.',
+  'Additional Pension and faster accrual are not inheritable capital — the extra pension dies with you unless you separately pay for dependant cover.',
+  'Leaving teaching soon erodes the value — you lose the salary link (final salary) or the CPI+1.6% in-service revaluation (career average) the moment you leave, and any AP bought stops accruing the same way.',
+  'Large purchases can breach your £60,000 Annual Allowance in the year you buy them — the pension input is roughly 16× the increase in your annual pension, on top of your normal accrual.',
+  'Buy Out (removing the 65→NPA reduction) is only electable within 6 months of first joining the career-average scheme — there is no ongoing window to purchase it later.',
+  'The Prudential Teachers’ AVC has no employer match, so a low-cost SIPP or ISA usually wins on fees and flexibility for money you’d otherwise put there.',
+];
+
 export default function TeachersPension() {
   const [config, setConfig] = useState<FireConfig>(defaultConfig);
   const [local, setLocal] = useState<TeachersPensionConfig>(defaultTps());
@@ -218,6 +265,106 @@ export default function TeachersPension() {
 
   const lumpSumReal = computed ? (nominalFactor !== 0 ? computed.totalLumpSumAtClaim / nominalFactor : computed.totalLumpSumAtClaim) : 0;
   const totalPensionNominal = computed ? computed.streams.reduce((sum, s) => sum + s.annualPensionAtClaim, 0) : 0;
+
+  // --- Step 9: decision tools ------------------------------------------
+
+  const careNpaRaw = local.careerAverage?.normalPensionAge ?? 68;
+
+  const npaMarkers = useMemo<NpaMarker[]>(() => {
+    const markers: NpaMarker[] = [];
+    if (local.finalSalary) {
+      const fsNpa = local.finalSalary.section === 'npa60' ? 60 : 65;
+      markers.push({ age: fsNpa, label: `FS NPA ${fsNpa}`, color: '#818cf8' });
+    }
+    if (local.careerAverage || local.mcCloud) {
+      markers.push({ age: careNpaRaw, label: `CARE NPA ${careNpaRaw}`, color: '#f97316' });
+    }
+    return markers;
+  }, [local.finalSalary, local.careerAverage, local.mcCloud, careNpaRaw]);
+
+  const sweepRows = useMemo(() => {
+    if (!local.enabled) return [];
+    try {
+      return sweepClaimAges(local, {
+        currentAge,
+        inflationRate: config.inflationRate,
+        lifeExpectancy: config.lifeExpectancy ?? 100,
+        minPensionAge: minAge,
+      });
+    } catch {
+      return [];
+    }
+  }, [local, currentAge, config.inflationRate, config.lifeExpectancy, minAge]);
+
+  // Additional Pension calculator ---------------------------------------
+  const maxApBlocks = Math.floor(AP_MAX_ANNUAL / AP_BLOCK);
+  const [apBlocks, setApBlocks] = useState(4); // £1,000/yr default
+  const [marginalTaxRate, setMarginalTaxRate] = useState(40);
+
+  // additionalPensionValue only accepts NPA 65-68; clamp the user's configured
+  // CARE NPA into that range and surface a note when we had to.
+  const apNpa = Math.min(68, Math.max(65, Math.round(careNpaRaw))) as 65 | 66 | 67 | 68;
+  const apNpaClamped = apNpa !== careNpaRaw;
+  const lowestWithdrawalRate = config.withdrawalRates.length > 0 ? Math.min(...config.withdrawalRates) : 4;
+
+  const apResult = useMemo<ApValueResult | null>(() => {
+    try {
+      return additionalPensionValue({
+        age: currentAge,
+        npa: apNpa,
+        annualPension: apBlocks * AP_BLOCK,
+        marginalTaxRate,
+        claimAge: local.claimAge,
+        withdrawalRate: lowestWithdrawalRate,
+      });
+    } catch {
+      // Transient invalid input (e.g. mid-drag slider state) — just hide the result.
+      return null;
+    }
+  }, [currentAge, apNpa, apBlocks, marginalTaxRate, local.claimAge, lowestWithdrawalRate]);
+
+  // Faster accrual calculator --------------------------------------------
+  const [fasterDenom, setFasterDenom] = useState<55 | 50 | 45>(50);
+
+  const fasterResult = useMemo<FasterAccrualResult | null>(() => {
+    if (!(local.stillInService && local.futureAccrual)) return null;
+    try {
+      return fasterAccrualValue({
+        salary: local.futureAccrual.currentSalary,
+        denominator: fasterDenom,
+        marginalTaxRate,
+      });
+    } catch {
+      return null;
+    }
+  }, [local.stillInService, local.futureAccrual, fasterDenom, marginalTaxRate]);
+
+  // Scenario export --------------------------------------------------------
+  const [savingScenarios, setSavingScenarios] = useState(false);
+  const [scenarioExportStatus, setScenarioExportStatus] = useState<'success' | 'error' | null>(null);
+
+  const handleExportScenarios = async () => {
+    if (!local.mcCloud) return;
+    setSavingScenarios(true);
+    setScenarioExportStatus(null);
+    try {
+      const mcCloud = local.mcCloud;
+      const baseConfig: FireConfig = { ...config, teachersPension: local };
+      await createFireScenario({
+        name: 'TPS: final salary choice',
+        config: { ...baseConfig, teachersPension: { ...local, mcCloud: { ...mcCloud, choice: 'finalSalary' } } },
+      });
+      await createFireScenario({
+        name: 'TPS: career average choice',
+        config: { ...baseConfig, teachersPension: { ...local, mcCloud: { ...mcCloud, choice: 'careerAverage' } } },
+      });
+      setScenarioExportStatus('success');
+    } catch {
+      setScenarioExportStatus('error');
+    } finally {
+      setSavingScenarios(false);
+    }
+  };
 
   if (loading) return (
     <div className="flex items-center gap-3" style={{ color: 'var(--text-tertiary)' }}>
@@ -600,19 +747,227 @@ export default function TeachersPension() {
             </div>
           )}
 
-          {/* Step 9 decision tools land here: claim-age sweep chart, McCloud
-              final-salary vs career-average comparison card, Additional
-              Pension / Faster Accrual value calculators, "when not to buy"
-              guidance, and scenario export. */}
-          <div className="card p-5" style={{ border: '1px dashed var(--border-subtle)' }}>
-            <h3 className="font-display text-sm font-semibold mb-1" style={{ color: 'var(--text-tertiary)' }}>
-              Decision tools &mdash; coming soon
+          {/* 1. Claim-age sweep */}
+          <div className="card p-6 space-y-3 animate-in">
+            <h3 className="font-display text-sm font-semibold" style={{ color: 'var(--text-primary)' }}>
+              Claim-Age Sweep
             </h3>
-            <p className="text-xs" style={{ color: 'var(--text-muted)' }}>
-              A claim-age sweep chart, McCloud final-salary vs career-average comparison, Additional Pension &amp; Faster
-              Accrual value calculators, and purchase guidance will appear here.
+            <p className="text-[0.65rem]" style={{ color: 'var(--text-muted)' }}>
+              How your total annual pension and lump sum change if you claim earlier or later, from your minimum pension
+              age ({minAge}) to 70. Dashed lines mark each tranche&rsquo;s Normal Pension Age and your currently selected
+              claim age.
             </p>
+            <ClaimAgeSweepChart rows={sweepRows} selectedClaimAge={local.claimAge} npaMarkers={npaMarkers} />
           </div>
+
+          {/* 2. McCloud comparison */}
+          {computed?.mcCloudComparison && (
+            <div className="card p-6 space-y-4 animate-in">
+              <h3 className="font-display text-sm font-semibold" style={{ color: 'var(--text-primary)' }}>
+                McCloud Remedy &mdash; Final Salary vs Career Average
+              </h3>
+              <div className="grid grid-cols-2 gap-4 text-xs">
+                <div className="space-y-1.5">
+                  <p
+                    className="font-medium uppercase tracking-wider text-[0.65rem]"
+                    style={{ color: computed.mcCloudComparison.recommended === 'finalSalary' ? 'var(--gold-bright)' : 'var(--text-tertiary)' }}
+                  >
+                    Final salary{computed.mcCloudComparison.recommended === 'finalSalary' ? ' (recommended)' : ''}
+                  </p>
+                  <StatRow label="Annual pension" value={`${formatPoundsShort(computed.mcCloudComparison.finalSalary.annualPensionReal)}/yr`} />
+                  <StatRow label="Lump sum" value={formatPoundsShort(computed.mcCloudComparison.finalSalary.lumpSumReal)} />
+                  <StatRow label="Cumulative to life expectancy" value={formatPoundsShort(computed.mcCloudComparison.finalSalary.cumulativeRealToLifeExpectancy)} />
+                </div>
+                <div className="space-y-1.5">
+                  <p
+                    className="font-medium uppercase tracking-wider text-[0.65rem]"
+                    style={{ color: computed.mcCloudComparison.recommended === 'careerAverage' ? 'var(--gold-bright)' : 'var(--text-tertiary)' }}
+                  >
+                    Career average{computed.mcCloudComparison.recommended === 'careerAverage' ? ' (recommended)' : ''}
+                  </p>
+                  <StatRow label="Annual pension" value={`${formatPoundsShort(computed.mcCloudComparison.careerAverage.annualPensionReal)}/yr`} />
+                  <StatRow label="Lump sum" value={formatPoundsShort(computed.mcCloudComparison.careerAverage.lumpSumReal)} />
+                  <StatRow label="Cumulative to life expectancy" value={formatPoundsShort(computed.mcCloudComparison.careerAverage.cumulativeRealToLifeExpectancy)} />
+                </div>
+              </div>
+
+              {computed.mcCloudComparison.breakevenAge != null && (
+                <p className="text-[0.65rem]" style={{ color: 'var(--text-muted)' }}>
+                  Breakeven age (where the two branches&rsquo; cumulative value crosses): {computed.mcCloudComparison.breakevenAge.toFixed(1)}
+                </p>
+              )}
+
+              <div
+                className="rounded-lg px-3 py-2 text-xs"
+                style={{ background: 'rgba(201, 162, 39, 0.1)', border: '1px solid rgba(201, 162, 39, 0.3)', color: 'var(--gold-bright)' }}
+              >
+                {computed.mcCloudComparison.recommended === 'finalSalary' ? 'Final salary' : 'Career average'} looks better at your claim age of{' '}
+                {local.claimAge} by{' '}
+                {formatPoundsShort(
+                  Math.abs(
+                    computed.mcCloudComparison.finalSalary.cumulativeRealToLifeExpectancy -
+                      computed.mcCloudComparison.careerAverage.cumulativeRealToLifeExpectancy,
+                  ),
+                )}{' '}
+                over your plan to age {config.lifeExpectancy ?? 100}.
+              </div>
+
+              {computed.mcCloudComparison.reasons.length > 0 && (
+                <ul className="space-y-1 text-[0.7rem] list-disc list-inside" style={{ color: 'var(--text-secondary)' }}>
+                  {computed.mcCloudComparison.reasons.map((r, i) => (
+                    <li key={i}>{r}</li>
+                  ))}
+                </ul>
+              )}
+
+              <p className="text-[0.6rem] pt-1" style={{ borderTop: '1px solid var(--border-subtle)', color: 'var(--text-muted)' }}>
+                The binding choice is made at retirement via your Remediable Service Statement &mdash; this models which
+                way it&rsquo;s likely to go.
+              </p>
+            </div>
+          )}
+
+          {/* 3. Additional Pension calculator */}
+          <div className="card p-6 space-y-4 animate-in">
+            <h3 className="font-display text-sm font-semibold" style={{ color: 'var(--text-primary)' }}>
+              Additional Pension Calculator
+            </h3>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <Field label={`Extra Pension: ${formatPoundsShort(apBlocks * AP_BLOCK)}/yr`}>
+                <input
+                  type="range"
+                  min={1}
+                  max={maxApBlocks}
+                  step={1}
+                  value={apBlocks}
+                  onChange={e => setApBlocks(Number(e.target.value))}
+                  className="w-full"
+                />
+                <p className="text-[0.6rem] mt-1" style={{ color: 'var(--text-muted)' }}>
+                  {apBlocks} &times; £{AP_BLOCK} blocks (max £{(maxApBlocks * AP_BLOCK).toLocaleString()}/yr).
+                </p>
+              </Field>
+              <Field label="Marginal Tax Rate">
+                <select value={marginalTaxRate} onChange={e => setMarginalTaxRate(Number(e.target.value))} className="input-dark">
+                  <option value={20}>20%</option>
+                  <option value={40}>40%</option>
+                  <option value={45}>45%</option>
+                </select>
+              </Field>
+            </div>
+
+            {apNpaClamped && (
+              <p className="text-[0.65rem]" style={{ color: '#f59e0b' }}>
+                This calculator only supports NPA 65&ndash;68 &mdash; using {apNpa} in place of your configured career-average NPA
+                of {careNpaRaw}.
+              </p>
+            )}
+
+            {apResult ? (
+              <>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-1.5 text-xs">
+                  <StatRow label="Gross cost" value={formatPoundsShort(apResult.grossCost)} />
+                  <StatRow label="Net cost (after tax relief)" value={formatPoundsShort(apResult.netCost)} />
+                  <StatRow label="Cost per £1/yr (net)" value={`£${apResult.costPerPoundNet.toFixed(2)}`} />
+                  <StatRow label="Effective pension at claim" value={`${formatPoundsShort(apResult.effectivePensionAtClaim)}/yr`} />
+                  <StatRow label="SIPP-equivalent capital" value={formatPoundsShort(apResult.sippEquivalentCapital)} />
+                  <StatRow label="Open-market annuity cost" value={formatPoundsShort(apResult.annuityEquivalentCost)} />
+                </div>
+                <VerdictBadge verdict={apResult.verdict} />
+                <ul className="space-y-1 text-[0.65rem] list-disc list-inside" style={{ color: 'var(--text-muted)' }}>
+                  {apResult.caveats.map((c, i) => (
+                    <li key={i}>{c}</li>
+                  ))}
+                </ul>
+              </>
+            ) : (
+              <p className="text-xs" style={{ color: 'var(--text-muted)' }}>
+                Enter a valid amount to see the value calculation.
+              </p>
+            )}
+          </div>
+
+          {/* 4. Faster Accrual calculator */}
+          {local.stillInService && local.futureAccrual && (
+            <div className="card p-6 space-y-4 animate-in">
+              <h3 className="font-display text-sm font-semibold" style={{ color: 'var(--text-primary)' }}>
+                Faster Accrual Calculator
+              </h3>
+              <Field label="Accrual Election for This Scheme Year">
+                <select
+                  value={fasterDenom}
+                  onChange={e => setFasterDenom(Number(e.target.value) as 55 | 50 | 45)}
+                  className="input-dark"
+                >
+                  <option value={55}>1/55th</option>
+                  <option value={50}>1/50th</option>
+                  <option value={45}>1/45th</option>
+                </select>
+                <p className="text-[0.6rem] mt-1" style={{ color: 'var(--text-muted)' }}>
+                  Uses the marginal tax rate selected above ({marginalTaxRate}%).
+                </p>
+              </Field>
+
+              {fasterResult ? (
+                <>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-1.5 text-xs">
+                    <StatRow label="Extra contribution" value={`${fasterResult.extraContributionPct}% (${formatPoundsShort(fasterResult.extraContributionAnnual)}/yr)`} />
+                    <StatRow label="Extra pension earned" value={`${formatPoundsShort(fasterResult.extraPensionEarned)}/yr`} />
+                    <StatRow label="Cost per £1/yr (gross)" value={`£${fasterResult.costPerPoundGross.toFixed(2)}`} />
+                    <StatRow label="Cost per £1/yr (net)" value={`£${fasterResult.costPerPoundNet.toFixed(2)}`} />
+                  </div>
+                  <VerdictBadge verdict={fasterResult.verdict} />
+                  <ul className="space-y-1 text-[0.65rem] list-disc list-inside" style={{ color: 'var(--text-muted)' }}>
+                    {fasterResult.caveats.map((c, i) => (
+                      <li key={i}>{c}</li>
+                    ))}
+                  </ul>
+                </>
+              ) : (
+                <p className="text-xs" style={{ color: 'var(--text-muted)' }}>
+                  Enter your current salary above to see the value calculation.
+                </p>
+              )}
+            </div>
+          )}
+
+          {/* 5. When not to buy */}
+          <div className="card p-6 space-y-3 animate-in">
+            <h3 className="font-display text-sm font-semibold" style={{ color: 'var(--text-primary)' }}>
+              When NOT to Buy TPS Extras
+            </h3>
+            <ul className="space-y-2 text-xs list-disc list-inside" style={{ color: 'var(--text-secondary)' }}>
+              {WHEN_NOT_TO_BUY.map((item, i) => (
+                <li key={i}>{item}</li>
+              ))}
+            </ul>
+          </div>
+
+          {/* 6. Scenario export */}
+          {local.mcCloud && (
+            <div className="card p-6 space-y-3 animate-in">
+              <h3 className="font-display text-sm font-semibold" style={{ color: 'var(--text-primary)' }}>
+                Compare in Your FIRE Plan
+              </h3>
+              <p className="text-xs" style={{ color: 'var(--text-secondary)' }}>
+                Save both McCloud branches as FIRE scenarios to compare their full projections side by side on the FIRE
+                page.
+              </p>
+              <button onClick={handleExportScenarios} disabled={savingScenarios} className="btn-gold py-2 px-4 text-sm">
+                {savingScenarios ? 'Saving...' : 'Save FS vs CARE as Scenarios'}
+              </button>
+              {scenarioExportStatus === 'success' && (
+                <p className="text-xs" style={{ color: 'var(--positive)' }}>
+                  Saved &mdash; view &ldquo;TPS: final salary choice&rdquo; and &ldquo;TPS: career average choice&rdquo; on the FIRE page.
+                </p>
+              )}
+              {scenarioExportStatus === 'error' && (
+                <p className="text-xs" style={{ color: 'var(--negative)' }}>
+                  Failed to save one or both scenarios &mdash; please try again.
+                </p>
+              )}
+            </div>
+          )}
 
           <div className="space-y-1">
             <button onClick={handleSave} disabled={saving} className="btn-gold w-full py-2.5">
