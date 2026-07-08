@@ -1,4 +1,5 @@
 import { useEffect, useState, useMemo } from 'react';
+import { Link } from 'react-router-dom';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend, ReferenceLine } from 'recharts';
 import { getFunds, getSnapshots, getFireConfig, updateFireConfig, getFireScenarios, createFireScenario, updateFireScenario, deleteFireScenario } from '../utils/api';
 import { calculateFireProjections, earliestFireAge as computeEarliestFireAge } from '../utils/fireCalculator';
@@ -11,6 +12,8 @@ import ProjectionTable from '../components/charts/ProjectionTable';
 import StressTestPanel from '../components/charts/StressTestPanel';
 import { runStressTest, DEFAULT_STRESS_SCENARIOS } from '../utils/stressTestCalculator';
 import { ConfigSection, Field } from '../components/ConfigSection';
+import { computeTpsBenefits } from '../utils/teachersPension';
+import { minPensionAge } from '../utils/tpsFactors';
 import type { Fund, Snapshot, FireConfig, FireResult, FireScenario, TaxConfig, StressScenarioConfig } from '../types';
 
 const SCENARIO_COLORS = ['#f97316', '#14b8a6', '#ec4899', '#84cc16', '#a855f7'];
@@ -143,6 +146,16 @@ export default function Fire() {
     const birthDate = new Date(config.dateOfBirth);
     return new Date().getFullYear() - birthDate.getFullYear();
   }, [config.dateOfBirth]);
+
+  const tpsBenefits = useMemo(() => {
+    if (!config.teachersPension?.enabled) return null;
+    return computeTpsBenefits(config.teachersPension, {
+      currentAge,
+      inflationRate: config.inflationRate,
+      lifeExpectancy: config.lifeExpectancy ?? 100,
+      minPensionAge: minPensionAge(config.dateOfBirth),
+    });
+  }, [config.teachersPension, config.inflationRate, config.lifeExpectancy, config.dateOfBirth, currentAge]);
 
   const earliestFireAge = useMemo(() => {
     if (!result) return null;
@@ -734,6 +747,35 @@ export default function Fire() {
           <Field label="Pension Lump Sum Allowance (£)">
             <input type="number" value={config.lumpSumAllowance ?? 268275} onChange={e => updateConfig({ lumpSumAllowance: Number(e.target.value) })} className="input-dark font-mono" />
           </Field>
+
+          {/* Teachers' Pension Summary */}
+          {tpsBenefits ? (
+            <div className="rounded-lg p-3 space-y-2" style={{ background: 'var(--surface-1)', border: '1px solid var(--border-subtle)' }}>
+              <div className="flex items-center justify-between">
+                <span className="text-[0.65rem] font-medium" style={{ color: 'var(--text-muted)' }}>Teachers' Pension</span>
+                <Link to="/teachers-pension" className="text-[0.65rem]" style={{ color: 'var(--gold)' }}>
+                  Edit
+                </Link>
+              </div>
+              <div>
+                <p className="text-xs font-mono" style={{ color: 'var(--text-primary)' }}>
+                  £{formatPoundsShort(tpsBenefits.totalAnnualPensionReal)}/yr from age {config.teachersPension!.claimAge}
+                  {tpsBenefits.totalLumpSumAtClaim > 0 && (
+                    <span className="ml-2" style={{ color: 'var(--text-secondary)' }}>
+                      + £{formatPoundsShort(tpsBenefits.totalLumpSumAtClaim)} lump sum
+                    </span>
+                  )}
+                </p>
+              </div>
+            </div>
+          ) : (
+            <p className="text-xs" style={{ color: 'var(--text-muted)' }}>
+              Have a Teachers' Pension?{' '}
+              <Link to="/teachers-pension" style={{ color: 'var(--gold)' }}>
+                Model it here
+              </Link>
+            </p>
+          )}
 
           {/* Defined Benefit Pensions */}
           <div className="space-y-3 pt-2">

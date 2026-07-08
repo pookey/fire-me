@@ -73,3 +73,8 @@ Open Banking or Plaid integration to auto-populate fund values.
 
 ### Import Improvements
 - Column mapping interface, validation preview, CSV template, undo/rollback
+
+## Teachers' Pension
+
+### GAD actuarial factors refresh
+The early-retirement reduction factors in `frontend/src/utils/tpsFactors.ts` are from the GAD 2023 review set (current as of 2026-01). Update when GAD reissues them (typically at scheme valuations every 3 years).

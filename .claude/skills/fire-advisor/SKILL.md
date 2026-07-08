@@ -159,6 +159,61 @@ Use `runStressTest()` to programmatically test bridge survival. The function tak
 - Single-income vs dual-income considerations
 - Healthcare/insurance gaps before state pension age
 
+### Defined Benefit & Teachers' Pension Planning
+The FireConfig supports multiple sources of guaranteed income:
+
+**FireConfig structure** (key fields):
+- `definedBenefitPensions?: DefinedBenefitPension[]` — array of DB pensions from previous employers
+- `teachersPension?: TeachersPensionConfig` — Teachers' Pension Scheme (TPS) benefits, modelled separately
+- `statePensionAmount`, `statePensionAge` — state pension from HMRC
+- All guaranteed income (DB + state pension) is now **income-taxed** in the simulator, reflecting real take-home value
+
+**TeachersPensionConfig** (UK Teachers' Pension Scheme, England & Wales):
+```typescript
+{
+  enabled: boolean;
+  statementDate: string; // 'YYYY-MM'
+  finalSalary?: {
+    section: 'npa60' | 'npa65'; // 1/80 + automatic 3× lump sum, or 1/60
+    accruedAnnualPension: number;
+    automaticLumpSum?: number; // NPA60 only
+  };
+  careerAverage?: {
+    accruedAnnualPension: number;
+    normalPensionAge: number; // max(65, state pension age)
+  };
+  mcCloud?: {
+    finalSalaryAnnualPension: number;
+    finalSalaryLumpSum?: number;
+    careAnnualPension: number;
+    choice: 'finalSalary' | 'careerAverage' | 'auto';
+  };
+  additionalPensionAccrued?: number;
+  stillInService: boolean;
+  futureAccrual?: {
+    currentSalary: number;
+    leavingAge: number;
+    salaryGrowthRate?: number;
+    accrualDenominator?: 57 | 55 | 50 | 45;
+  };
+  claimAge: number;
+  commutedPension?: number;
+}
+```
+
+**Teachers' Pension Tools** (via the `/teachers-pension` page):
+The dedicated page provides decision-support tools for UK teachers:
+- **McCloud comparison** — model both Final Salary and Career Average branches side-by-side; 'auto' mode recommends the better choice at your claim age
+- **Claim-age sweep** — visualize how annual pension and lump sum vary across ages 55–70; see cumulative value at each age
+- **Additional Pension calculator** — evaluate extra pension purchases: gross/net cost, cost per £1/yr after early-retirement reduction, vs SIPP-equivalent capital
+- **Faster Accrual calculator** — understand the value of electing 1/55, 1/50, or 1/45 for a year instead of 1/57
+- **"When NOT to buy" guidance** — early claimants face 30–45% reductions; AP is not inheritable capital; Annual Allowance interactions
+
+When a user mentions they teach or have TPS benefits, ask:
+- "Do you have any remedy-period (2015–22) service? That opens up a choice between FS and CARE at retirement."
+- "Are you still teaching, or deferred? That affects revaluation rates and early-claim reduction factors."
+- "Are you considering any purchase options — Additional Pension, Faster Accrual, or Buy Out?"
+
 ## Conversation Flow
 
 ### Ask Questions Like:
