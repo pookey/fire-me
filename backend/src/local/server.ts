@@ -4,16 +4,26 @@ import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import type {
-  APIGatewayProxyEventV2,
+  APIGatewayProxyEventV2WithJWTAuthorizer,
   APIGatewayProxyHandlerV2,
   APIGatewayProxyStructuredResultV2,
   Context,
 } from "aws-lambda";
-import { DynamoDBClient } from "@aws-sdk/client-dynamodb";
-import { ensureTable } from "./ensureTable.js";
+import { docClient, TABLE_NAME } from "../utils/db.js";
+import {
+  AuthError,
+  ensureAuthTable,
+  resetPassword,
+  resolveSession,
+  signIn,
+  signOut,
+  type ResolvedSession,
+} from "./auth.js";
+import { als, installTableRewrite } from "./tableContext.js";
 
 const PORT = Number(process.env.PORT ?? 3000);
 const HANDLERS_DIR = path.join(__dirname, "..", "handlers");
+const DB_MODULE = path.join(__dirname, "..", "utils", "db.ts");
 
 // response.ts sends Access-Control-Allow-Headers: * but the fetch spec does not
 // treat the wildcard as covering Authorization, so preflight must name it.
@@ -124,7 +134,8 @@ function buildEvent(
   routeKey: string,
   params: Record<string, string>,
   body: string | undefined,
-): APIGatewayProxyEventV2 {
+  session: ResolvedSession,
+): APIGatewayProxyEventV2WithJWTAuthorizer {
   const headers: Record<string, string> = {};
   for (const [name, value] of Object.entries(req.headers)) {
     if (value !== undefined) headers[name] = Array.isArray(value) ? value.join(",") : value;
@@ -148,6 +159,16 @@ function buildEvent(
     requestContext: {
       accountId: "local",
       apiId: "local",
+      // Shaped like API Gateway's JWT authorizer output so a handler that starts
+      // reading the caller's identity works unchanged here.
+      authorizer: {
+        principalId: session.userId,
+        integrationLatency: 0,
+        jwt: {
+          claims: { sub: session.userId, email: session.email },
+          scopes: [],
+        },
+      },
       domainName: `localhost:${PORT}`,
       domainPrefix: "localhost",
       http: {
@@ -184,13 +205,87 @@ function sendJson(res: ServerResponse, statusCode: number, data: unknown): void 
   send(res, statusCode, { "Content-Type": "application/json" }, JSON.stringify(data));
 }
 
+function bearerToken(req: IncomingMessage): string | undefined {
+  const header = req.headers.authorization;
+  if (!header) return undefined;
+  const [scheme, token] = header.split(" ", 2);
+  return scheme?.toLowerCase() === "bearer" && token ? token : undefined;
+}
+
+async function readJsonBody(req: IncomingMessage): Promise<Record<string, unknown>> {
+  const body = await readBody(req);
+  if (!body) return {};
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(body);
+  } catch {
+    throw new AuthError(400, "Body must be valid JSON");
+  }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new AuthError(400, "Body must be a JSON object");
+  }
+  return parsed as Record<string, unknown>;
+}
+
+const asString = (value: unknown) => (typeof value === "string" ? value : "");
+
+// Stands in for Cognito. Only sign-in creates accounts, so the frontend's
+// existing login form is the whole onboarding flow.
+async function handleAuth(
+  method: string,
+  pathname: string,
+  req: IncomingMessage,
+  res: ServerResponse,
+): Promise<boolean> {
+  if (method === "POST" && pathname === "/local/auth/sign-in") {
+    const body = await readJsonBody(req);
+    const result = await signIn(asString(body.email), asString(body.password));
+    sendJson(res, 200, { token: result.token, userId: result.userId, username: result.email });
+    return true;
+  }
+  if (method === "GET" && pathname === "/local/auth/session") {
+    const token = bearerToken(req);
+    const session = token ? await resolveSession(token) : undefined;
+    if (!session) sendJson(res, 401, { message: "Unauthorized" });
+    else sendJson(res, 200, { userId: session.userId, username: session.email });
+    return true;
+  }
+  if (method === "POST" && pathname === "/local/auth/sign-out") {
+    const token = bearerToken(req);
+    if (token) await signOut(token);
+    send(res, 204, undefined, undefined);
+    return true;
+  }
+  if (method === "POST" && pathname === "/local/auth/reset-password") {
+    const body = await readJsonBody(req);
+    // The confirmation code is accepted but never checked: nothing sends email
+    // locally, so there is no code to compare against.
+    await resetPassword(asString(body.email), asString(body.newPassword));
+    send(res, 204, undefined, undefined);
+    return true;
+  }
+  return false;
+}
+
 async function handleRequest(routes: Route[], req: IncomingMessage, res: ServerResponse) {
   const method = (req.method ?? "GET").toUpperCase();
   const url = new URL(req.url ?? "/", `http://localhost:${PORT}`);
 
+  // Preflight carries no Authorization header, so it must be answered before
+  // the session check or the browser never gets to send the real request.
   if (method === "OPTIONS") {
     send(res, 204, undefined, undefined);
     return;
+  }
+
+  try {
+    if (await handleAuth(method, url.pathname, req, res)) return;
+  } catch (err) {
+    if (err instanceof AuthError) {
+      sendJson(res, err.statusCode, { message: err.message });
+      return;
+    }
+    throw err;
   }
 
   const match = matchRoute(routes, method, url.pathname);
@@ -199,10 +294,19 @@ async function handleRequest(routes: Route[], req: IncomingMessage, res: ServerR
     return;
   }
 
+  const token = bearerToken(req);
+  const session = token ? await resolveSession(token) : undefined;
+  if (!session) {
+    sendJson(res, 401, { message: "Unauthorized" });
+    return;
+  }
+
   const body = await readBody(req);
-  const event = buildEvent(req, method, url, match.route.routeKey, match.params, body);
+  const event = buildEvent(req, method, url, match.route.routeKey, match.params, body, session);
   // Handlers never read the Lambda context, so an empty one is enough.
-  const result = await match.route.handler(event, {} as Context, () => undefined);
+  const result = await als.run({ tableName: session.tableName }, () =>
+    match.route.handler(event, {} as Context, () => undefined),
+  );
 
   if (result === undefined) {
     sendJson(res, 500, { message: "Handler returned nothing" });
@@ -214,11 +318,24 @@ async function handleRequest(routes: Route[], req: IncomingMessage, res: ServerR
   }
 }
 
-async function main() {
-  const tableName = process.env.TABLE_NAME;
-  if (!tableName) throw new Error("TABLE_NAME is required");
+// The handlers reach utils/db.ts through tsx's ESM loader (loadRoutes uses a
+// file URL import) while this file reaches it through a static import. If the
+// two ever resolved to different module instances the middleware would be on a
+// client the handlers never use and every request would hit the shared table,
+// so refuse to start rather than trust that they agree.
+async function assertSingleDocClient(): Promise<void> {
+  const viaEsm: { docClient?: unknown } = await import(pathToFileURL(DB_MODULE).href);
+  if (viaEsm.docClient !== docClient) {
+    throw new Error("utils/db.ts loaded twice; table rewrite would not apply to handlers");
+  }
+}
 
-  await ensureTable(new DynamoDBClient({ maxAttempts: 1 }), tableName);
+async function main() {
+  if (!TABLE_NAME) throw new Error("TABLE_NAME is required");
+
+  installTableRewrite(docClient, TABLE_NAME);
+  await assertSingleDocClient();
+  await ensureAuthTable();
   const routes = await loadRoutes();
 
   createServer((req, res) => {
@@ -228,7 +345,7 @@ async function main() {
       else res.end();
     });
   }).listen(PORT, () => {
-    console.log(`Listening on http://localhost:${PORT} (table ${tableName})`);
+    console.log(`Listening on http://localhost:${PORT} (first account owns table ${TABLE_NAME})`);
   });
 }
 

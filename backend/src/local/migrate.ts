@@ -6,15 +6,21 @@
 //
 // The source client needs whatever AWS credentials you normally use (profile,
 // SSO, env vars). The values above are the defaults.
+//
+// The destination is TABLE_NAME, which the first local account to sign in
+// takes over. Set LOCAL_USER=<email> to copy into a specific account's table
+// instead; that account must already have signed in once so its table exists.
 
 import {
   BatchWriteItemCommand,
   DynamoDBClient,
+  GetItemCommand,
   ScanCommand,
   type AttributeValue,
   type WriteRequest,
 } from "@aws-sdk/client-dynamodb";
 import { ensureTable } from "./ensureTable.js";
+import { LOCAL_AUTH_TABLE, profileKey } from "./auth.js";
 
 // Removed rather than ignored: the SDK applies these to every client that does
 // not set `endpoint` explicitly, so a shell that exports them for the server
@@ -28,6 +34,7 @@ const SOURCE_REGION = process.env.SOURCE_REGION ?? "eu-west-2";
 const SOURCE_TABLE = process.env.SOURCE_TABLE ?? "FinTrack";
 const LOCAL_ENDPOINT = process.env.LOCAL_DYNAMODB_ENDPOINT ?? "http://localhost:8000";
 const LOCAL_TABLE = process.env.TABLE_NAME ?? "FinTrack";
+const LOCAL_USER = process.env.LOCAL_USER;
 // Lets the copy be rehearsed against a throwaway DynamoDB Local instead of AWS.
 const SOURCE_ENDPOINT = process.env.SOURCE_ENDPOINT;
 // Without -sharedDb, DynamoDB Local keeps a separate database per access key
@@ -65,6 +72,28 @@ async function batchWrite(client: DynamoDBClient, tableName: string, items: Item
   }
 }
 
+async function destinationTable(client: DynamoDBClient): Promise<string> {
+  if (!LOCAL_USER) return LOCAL_TABLE;
+  const missing = new Error(
+    `No local account for ${LOCAL_USER} in ${LOCAL_AUTH_TABLE}; sign in to the local frontend first`,
+  );
+  let tableName: string | undefined;
+  try {
+    const result = await client.send(
+      new GetItemCommand({
+        TableName: LOCAL_AUTH_TABLE,
+        Key: { pk: { S: profileKey(LOCAL_USER) }, sk: { S: "PROFILE" } },
+      }),
+    );
+    tableName = result.Item?.tableName?.S;
+  } catch (err) {
+    // The auth table itself only exists once the server has booted.
+    if ((err as { name?: string }).name !== "ResourceNotFoundException") throw err;
+  }
+  if (!tableName) throw missing;
+  return tableName;
+}
+
 async function main() {
   const source = new DynamoDBClient({
     region: SOURCE_REGION,
@@ -80,17 +109,18 @@ async function main() {
     maxAttempts: 1,
   });
 
-  await ensureTable(destination, LOCAL_TABLE);
+  const target = await destinationTable(destination);
+  await ensureTable(destination, target);
 
   let copied = 0;
   for await (const page of scanAll(source, SOURCE_TABLE)) {
     for (let i = 0; i < page.length; i += 25) {
-      await batchWrite(destination, LOCAL_TABLE, page.slice(i, i + 25));
+      await batchWrite(destination, target, page.slice(i, i + 25));
     }
     copied += page.length;
     console.log(`Copied ${copied} items...`);
   }
-  console.log(`Done: ${copied} items from ${SOURCE_TABLE} (${SOURCE_REGION}) to ${LOCAL_TABLE} at ${LOCAL_ENDPOINT}`);
+  console.log(`Done: ${copied} items from ${SOURCE_TABLE} (${SOURCE_REGION}) to ${target} at ${LOCAL_ENDPOINT}`);
 }
 
 main().catch((err: unknown) => {

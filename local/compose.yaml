@@ -2,8 +2,8 @@
 # plain HTTP adapter + the Vite dev server with Cognito stubbed out.
 # Run from the repo root:  docker compose -f local/compose.yaml up
 #
-# Ports bind to 127.0.0.1 only because the local API has no authentication
-# at all (API Gateway did that in AWS), so it must not be reachable from the LAN.
+# Ports bind to 127.0.0.1 only: the local sign-in stands in for Cognito with
+# no rate limiting or verification, so the API must not be reachable from the LAN.
 # Host ports are overridable (FRONTEND_PORT, API_PORT, DYNAMODB_PORT) because
 # 5173 in particular is often taken by another Vite project or a ddev router.
 
