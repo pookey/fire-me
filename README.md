@@ -31,6 +31,8 @@ Three independent packages (no monorepo tooling):
 
 ## Setup
 
+To run everything locally in Docker with no AWS account, see [local/README.md](local/README.md).
+
 ### 1. Configure your AWS environment
 
 Edit `infrastructure/bin/infrastructure.ts` and set your AWS account ID, domain, and hosted zone — or set them as environment variables:

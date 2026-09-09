@@ -1,0 +1,62 @@
+# Self-contained local stack: DynamoDB Local + the Lambda handlers behind a
+# plain HTTP adapter + the Vite dev server with Cognito stubbed out.
+# Run from the repo root:  docker compose -f local/compose.yaml up
+#
+# Ports bind to 127.0.0.1 only because the local API has no authentication
+# at all (API Gateway did that in AWS), so it must not be reachable from the LAN.
+# Host ports are overridable (FRONTEND_PORT, API_PORT, DYNAMODB_PORT) because
+# 5173 in particular is often taken by another Vite project or a ddev router.
+
+name: fintrack-local
+
+services:
+  dynamodb:
+    image: amazon/dynamodb-local:latest
+    # -sharedDb makes every credential/region see the same database, and
+    # -dbPath persists it; without both, data vanishes on container restart.
+    command: -jar DynamoDBLocal.jar -sharedDb -dbPath /home/dynamodblocal/data
+    # The image runs as an unprivileged user but named volumes are created
+    # root-owned, so the process cannot write its data file without this.
+    user: root
+    ports:
+      - "127.0.0.1:${DYNAMODB_PORT:-8000}:8000"
+    volumes:
+      - dynamodb-data:/home/dynamodblocal/data
+
+  api:
+    build:
+      context: ../backend
+      dockerfile: ../local/backend.Dockerfile
+    environment:
+      TABLE_NAME: FinTrack
+      PORT: "3000"
+      AWS_REGION: eu-west-2
+      AWS_ACCESS_KEY_ID: local
+      AWS_SECRET_ACCESS_KEY: local
+      # The SDK v3 client in backend/src/utils/db.ts reads this from the
+      # environment, so the handlers need no code change to hit DynamoDB Local.
+      AWS_ENDPOINT_URL_DYNAMODB: http://dynamodb:8000
+    ports:
+      - "127.0.0.1:${API_PORT:-3000}:3000"
+    volumes:
+      - ../backend/src:/app/src
+    depends_on:
+      - dynamodb
+
+  frontend:
+    build:
+      context: ../frontend
+      dockerfile: ../local/frontend.Dockerfile
+    environment:
+      # Browser-facing, so localhost rather than the compose service name.
+      VITE_API_URL: http://localhost:${API_PORT:-3000}
+    ports:
+      - "127.0.0.1:${FRONTEND_PORT:-5180}:5173"
+    volumes:
+      - ../frontend:/app
+      - /app/node_modules
+    depends_on:
+      - api
+
+volumes:
+  dynamodb-data:
