@@ -100,7 +100,18 @@ const DEFAULT_TAX_CONFIG: TaxConfig = {
   cgtHigherRate: 20,
 };
 
-const DEFAULT_DRAWDOWN_ORDER: TaxWrapper[] = ['gia', 'none', 'isa', 'lisa', 'sipp'];
+/** Spend cash before selling investments; 'none' funds are excluded from the projection so never appear here. */
+export const DEFAULT_DRAWDOWN_ORDER: TaxWrapper[] = ['cash_savings', 'gia', 'isa', 'lisa', 'sipp'];
+
+/**
+ * Stored configs predate the cash_savings wrapper: an order missing it would
+ * leave cash undrawn while reporting unmet spend, so it is prepended when absent.
+ */
+export function normaliseDrawdownOrder(order?: TaxWrapper[]): TaxWrapper[] {
+  if (!order) return [...DEFAULT_DRAWDOWN_ORDER];
+  const cleaned = order.filter(w => w !== 'none');
+  return cleaned.includes('cash_savings') ? cleaned : ['cash_savings', ...cleaned];
+}
 const DEFAULT_LUMP_SUM_ALLOWANCE = 268275; // pounds
 
 function resolveWrapper(fund: Fund): TaxWrapper {
@@ -155,7 +166,7 @@ export function calculateIncomeTax(income: number, taxConfig: TaxConfig): number
 }
 
 /**
- * Calculate capital gains tax on GIA/none withdrawals.
+ * Calculate capital gains tax on GIA withdrawals.
  * Assumes 50% of withdrawals are gains.
  * Uses basic rate CGT band when other taxable income leaves room in the basic rate band.
  */
@@ -185,7 +196,8 @@ function grossWithdrawalForNet(
   taxConfig: TaxConfig,
   otherTaxableIncome: number
 ): { gross: number; tax: number } {
-  if (wrapper === 'isa' || wrapper === 'lisa') {
+  // Cash savings: no CGT on cash, and interest is not modelled, so the draw is tax-free.
+  if (wrapper === 'isa' || wrapper === 'lisa' || wrapper === 'cash_savings') {
     return { gross: netNeeded, tax: 0 };
   }
 
@@ -203,7 +215,7 @@ function grossWithdrawalForNet(
     return { gross, tax };
   }
 
-  // GIA or none: CGT on assumed 50% gains
+  // GIA: CGT on assumed 50% gains
   const tax = calculateCGT(netNeeded, taxConfig, otherTaxableIncome);
   return { gross: netNeeded + tax, tax };
 }
@@ -217,6 +229,7 @@ function aggregateByWrapper(fundBalances: FundBalance[]): Record<TaxWrapper, Buc
     lisa: zeroBucket(),
     sipp: zeroBucket(),
     gia: zeroBucket(),
+    cash_savings: zeroBucket(),
     none: zeroBucket(),
   };
   for (const fb of fundBalances) {
@@ -344,7 +357,7 @@ export function calculateFireProjections(
   const endAge = config.lifeExpectancy ?? 100;
   const showRealTerms = config.showRealTerms ?? false;
   const taxConfig = config.taxConfig ?? DEFAULT_TAX_CONFIG;
-  const drawdownOrder = config.drawdownOrder ?? DEFAULT_DRAWDOWN_ORDER;
+  const drawdownOrder = normaliseDrawdownOrder(config.drawdownOrder);
   const definedBenefitPensions: DefinedBenefitPension[] = [...(config.definedBenefitPensions ?? [])];
   const lumpSumAllowance = config.lumpSumAllowance ?? DEFAULT_LUMP_SUM_ALLOWANCE;
 
@@ -356,7 +369,7 @@ export function calculateFireProjections(
     const fund = fundMap.get(snapshot.fundId);
     if (!fund) continue;
     const wrapper = resolveWrapper(fund);
-    // Exclude non-investable assets (e.g. property) from FIRE projections
+    // 'none' is the user's choice to leave the fund out of FIRE entirely
     if (wrapper === 'none') continue;
     const isSipp = wrapper === 'sipp';
     const isLisa = wrapper === 'lisa';
@@ -536,6 +549,7 @@ export function calculateFireProjections(
       const lisaTotal = totalBucket(wrapperBuckets.lisa);
       const sippTotal = totalBucket(wrapperBuckets.sipp);
       const giaTotal = totalBucket(wrapperBuckets.gia);
+      const cashSavingsTotal = totalBucket(wrapperBuckets.cash_savings);
 
       // Accessibility: per-fund based on drawdownAge
       let accessibleTotal = 0;
@@ -581,7 +595,7 @@ export function calculateFireProjections(
       let yearTaxPaid = guaranteedIncomeTax;
       let yearGrossWithdrawal = 0;
       let unmetSpend = 0;
-      const yearDrawdownByWrapper: Record<string, number> = { isa: 0, lisa: 0, sipp: 0, gia: 0, none: 0 };
+      const yearDrawdownByWrapper: Record<string, number> = { isa: 0, lisa: 0, sipp: 0, gia: 0, cash_savings: 0, none: 0 };
 
       let isDrawingDown = false;
       if (netSpend > 0) {
@@ -618,7 +632,7 @@ export function calculateFireProjections(
               const totalT = calculateIncomeTax(otherTaxableIncome + actualGross, taxConfig);
               const baseT = calculateIncomeTax(otherTaxableIncome, taxConfig);
               actualTax = totalT - baseT;
-            } else if (wrapper === 'gia' || wrapper === 'none') {
+            } else if (wrapper === 'gia') {
               actualTax = calculateCGT(actualGross, taxConfig, otherTaxableIncome);
             }
           }
@@ -658,6 +672,7 @@ export function calculateFireProjections(
           lisa: Math.round(lisaTotal),
           sipp: Math.round(sippTotal),
           gia: Math.round(giaTotal),
+          cashSavings: Math.round(cashSavingsTotal),
           definedBenefitIncome: Math.round(dbIncome),
           accessibleBreakdown: {
             equities: Math.round(accessibleBucket.equities),
@@ -685,6 +700,7 @@ export function calculateFireProjections(
         projection.drawdownLisa = Math.round(yearDrawdownByWrapper.lisa);
         projection.drawdownSipp = Math.round(yearDrawdownByWrapper.sipp);
         projection.drawdownGia = Math.round(yearDrawdownByWrapper.gia);
+        projection.drawdownCashSavings = Math.round(yearDrawdownByWrapper.cash_savings);
         projection.guaranteedIncome = Math.round(guaranteedIncome);
         projection.guaranteedIncomeTax = Math.round(guaranteedIncomeTax);
         rows.push(projection);

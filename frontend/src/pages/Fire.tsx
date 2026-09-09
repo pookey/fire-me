@@ -2,7 +2,7 @@ import { useEffect, useState, useMemo } from 'react';
 import { Link } from 'react-router-dom';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend, ReferenceLine } from 'recharts';
 import { getFunds, getSnapshots, getFireConfig, updateFireConfig, getFireScenarios, createFireScenario, updateFireScenario, deleteFireScenario } from '../utils/api';
-import { calculateFireProjections, earliestFireAge as computeEarliestFireAge } from '../utils/fireCalculator';
+import { calculateFireProjections, earliestFireAge as computeEarliestFireAge, normaliseDrawdownOrder } from '../utils/fireCalculator';
 import { formatPoundsShort } from '../utils/formatters';
 import WithdrawalRateChart from '../components/charts/WithdrawalRateChart';
 import AssetAllocationChart from '../components/charts/AssetAllocationChart';
@@ -14,6 +14,7 @@ import { runStressTest, DEFAULT_STRESS_SCENARIOS } from '../utils/stressTestCalc
 import { ConfigSection, Field } from '../components/ConfigSection';
 import { computeTpsBenefits } from '../utils/teachersPension';
 import { minPensionAge } from '../utils/tpsFactors';
+import { WRAPPER_LABELS } from '../types';
 import type { Fund, Snapshot, FireConfig, FireResult, FireScenario, TaxConfig, StressScenarioConfig } from '../types';
 
 const SCENARIO_COLORS = ['#f97316', '#14b8a6', '#ec4899', '#84cc16', '#a855f7'];
@@ -302,6 +303,7 @@ export default function Fire() {
   if (error) return <div style={{ color: 'var(--negative)' }}>Error: {error}</div>;
 
   const yearsToFire = earliestFireAge !== null ? earliestFireAge - currentAge : null;
+  const drawdownOrder = normaliseDrawdownOrder(config.drawdownOrder);
 
   return (
     <div className="space-y-6">
@@ -894,21 +896,20 @@ export default function Fire() {
           <div className="space-y-3">
             <label className="block text-[0.65rem] font-medium uppercase tracking-wider" style={{ color: 'var(--text-tertiary)' }}>Drawdown Order</label>
             <p className="text-[0.65rem]" style={{ color: 'var(--text-muted)' }}>Reorder which wrappers to draw from first.</p>
-            {(config.drawdownOrder ?? ['gia', 'none', 'isa', 'lisa', 'sipp']).map((wrapper, i) => {
-              const order = config.drawdownOrder ?? ['gia', 'none', 'isa', 'lisa', 'sipp'];
+            {drawdownOrder.map((wrapper, i) => {
               return (
                 <div key={wrapper} className="flex items-center gap-2">
                   <span className="text-[0.65rem] w-4 font-mono" style={{ color: 'var(--text-muted)' }}>{i + 1}.</span>
-                  <span className="flex-1 text-xs font-medium uppercase" style={{ color: 'var(--text-secondary)' }}>{wrapper}</span>
+                  <span className="flex-1 text-xs font-medium" style={{ color: 'var(--text-secondary)' }}>{WRAPPER_LABELS[wrapper]}</span>
                   <button
                     disabled={i === 0}
-                    onClick={() => { const newOrder = [...order]; [newOrder[i - 1], newOrder[i]] = [newOrder[i], newOrder[i - 1]]; updateConfig({ drawdownOrder: newOrder }); }}
+                    onClick={() => { const newOrder = [...drawdownOrder]; [newOrder[i - 1], newOrder[i]] = [newOrder[i], newOrder[i - 1]]; updateConfig({ drawdownOrder: newOrder }); }}
                     className="text-[0.65rem] disabled:opacity-20"
                     style={{ color: 'var(--text-muted)' }}
                   >Up</button>
                   <button
-                    disabled={i === order.length - 1}
-                    onClick={() => { const newOrder = [...order]; [newOrder[i], newOrder[i + 1]] = [newOrder[i + 1], newOrder[i]]; updateConfig({ drawdownOrder: newOrder }); }}
+                    disabled={i === drawdownOrder.length - 1}
+                    onClick={() => { const newOrder = [...drawdownOrder]; [newOrder[i], newOrder[i + 1]] = [newOrder[i + 1], newOrder[i]]; updateConfig({ drawdownOrder: newOrder }); }}
                     className="text-[0.65rem] disabled:opacity-20"
                     style={{ color: 'var(--text-muted)' }}
                   >Down</button>

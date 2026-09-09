@@ -16,6 +16,7 @@ export default function CashFlowChart({ projections, retirementStartAge }: Props
       drawdownLisa: p.drawdownLisa ?? 0,
       drawdownSipp: p.drawdownSipp ?? 0,
       drawdownGia: p.drawdownGia ?? 0,
+      drawdownCashSavings: p.drawdownCashSavings ?? 0,
       statePension: p.statePension,
       definedBenefitIncome: p.definedBenefitIncome ?? 0,
       taxPaid: p.taxPaid ?? 0,
@@ -47,6 +48,7 @@ export default function CashFlowChart({ projections, retirementStartAge }: Props
         <Bar dataKey="drawdownLisa" name="LISA Drawdown" stackId="income" fill="#10b981" fillOpacity={0.7} />
         <Bar dataKey="drawdownSipp" name="SIPP Drawdown" stackId="income" fill="#818cf8" fillOpacity={0.7} />
         <Bar dataKey="drawdownGia" name="GIA Drawdown" stackId="income" fill="#f97316" fillOpacity={0.7} />
+        <Bar dataKey="drawdownCashSavings" name="Cash Savings Drawdown" stackId="income" fill="#84cc16" fillOpacity={0.7} />
         <Bar dataKey="statePension" name="State Pension" stackId="income" fill="var(--gold)" fillOpacity={0.7} />
         <Bar dataKey="definedBenefitIncome" name="DB Pension" stackId="income" fill="#06b6d4" fillOpacity={0.7} />
         <Bar dataKey="taxPaid" name="Tax" stackId="income" fill="var(--negative)" fillOpacity={0.5} />

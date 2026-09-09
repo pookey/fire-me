@@ -22,6 +22,7 @@ export default function ProjectionTable({ projections, fireAge, currentAge }: Pr
       );
 
   const isFired = (p: FireProjection) => fireAge !== null && p.age >= fireAge;
+  const hasCashSavings = projections.some(p => (p.cashSavings ?? 0) > 0);
 
   return (
     <div>
@@ -44,6 +45,7 @@ export default function ProjectionTable({ projections, fireAge, currentAge }: Pr
               <th>LISA</th>
               <th>SIPP</th>
               <th>GIA</th>
+              {hasCashSavings && <th>Cash savings</th>}
               <th>Total</th>
               <th>Contribs</th>
               <th>Spend</th>
@@ -78,6 +80,7 @@ export default function ProjectionTable({ projections, fireAge, currentAge }: Pr
                   <td className="td-mono">{formatPoundsShort(p.lisa ?? 0)}</td>
                   <td className="td-mono">{formatPoundsShort(p.sipp ?? 0)}</td>
                   <td className="td-mono">{formatPoundsShort(p.gia ?? 0)}</td>
+                  {hasCashSavings && <td className="td-mono">{formatPoundsShort(p.cashSavings ?? 0)}</td>}
                   <td className="td-mono td-primary">{formatPoundsShort(p.total)}</td>
                   <td className="td-mono" style={{ color: (p.contributions ?? 0) > 0 ? 'var(--teal-bright)' : 'var(--text-muted)' }}>
                     {(p.contributions ?? 0) > 0 ? `+${formatPoundsShort(p.contributions!)}` : '—'}

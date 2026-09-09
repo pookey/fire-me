@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { calculateFireProjections, calculateIncomeTax, calculateCGT, findSubYearFireFraction, earliestFireAge, accessibleGrowthRateFromRow } from './fireCalculator';
+import { calculateFireProjections, calculateIncomeTax, calculateCGT, findSubYearFireFraction, earliestFireAge, accessibleGrowthRateFromRow, DEFAULT_DRAWDOWN_ORDER, normaliseDrawdownOrder } from './fireCalculator';
 import type { Fund, Snapshot, FireConfig, TaxConfig, FireProjection, TeachersPensionConfig } from '../types';
 
 // --- Test helpers ---
@@ -1931,6 +1931,144 @@ describe('fireCalculator', () => {
       ])).toBe(60);
       expect(earliestFireAge([{ withdrawalRate: 3, age: null, year: null }])).toBeNull();
       expect(earliestFireAge([])).toBeNull();
+    });
+  });
+
+  describe('cash savings wrapper', () => {
+    const noDrawdownConfig = () => makeConfig({
+      targetAnnualSpend: 3000000,
+      statePensionAmount: 0,
+      statePensionAge: 99,
+    });
+
+    it('is included and accessible from the current age', () => {
+      const funds = [makeFund({ subcategory: 'cash', wrapper: 'cash_savings' })];
+      const snapshots = [makeSnapshot({ value: 100000 })];
+      const result = calculateFireProjections(funds, snapshots, noDrawdownConfig());
+
+      const first = result.projections[0];
+      expect(first.accessible).toBe(100000);
+      expect(first.locked).toBe(0);
+      expect(first.cashSavings).toBe(100000);
+      expect(first.gia).toBe(0);
+    });
+
+    it('respects an explicit drawdownAge', () => {
+      const funds = [makeFund({ subcategory: 'cash', wrapper: 'cash_savings', drawdownAge: 40 })];
+      const snapshots = [makeSnapshot({ value: 100000 })];
+      const result = calculateFireProjections(funds, snapshots, noDrawdownConfig());
+
+      expect(result.projections[0].locked).toBe(100000);
+      expect(result.projections[0].accessible).toBe(0);
+      const at40 = result.projections.find(p => p.age === 40)!;
+      expect(at40.locked).toBe(0);
+      expect(at40.accessible).toBe(at40.total);
+    });
+
+    it('grows at the cash growth rate', () => {
+      const funds = [makeFund({ subcategory: 'cash', wrapper: 'cash_savings' })];
+      const snapshots = [makeSnapshot({ value: 100000 })];
+      const result = calculateFireProjections(funds, snapshots, noDrawdownConfig());
+
+      expect(result.projections[1].total).toBe(101000);
+      expect(result.projections[1].cashSavings).toBe(101000);
+    });
+
+    it('withdrawals are tax-free, unlike the same fund held as a GIA', () => {
+      const config = makeConfig({
+        targetAnnualSpend: 3000000,
+        growthRates: { equities: 0, bonds: 0, cash: 0, property: 0 },
+        inflationRate: 0,
+        statePensionAmount: 0,
+        statePensionAge: 99,
+        withdrawalRates: [4],
+      });
+      const snapshots = [makeSnapshot({ value: 100000000 })];
+      const cash = calculateFireProjections([makeFund({ subcategory: 'cash', wrapper: 'cash_savings' })], snapshots, config);
+      const gia = calculateFireProjections([makeFund({ subcategory: 'cash', wrapper: 'gia' })], snapshots, config);
+
+      expect(cash.projections[0].drawdownIncome).toBe(3000000);
+      expect(cash.projections[0].taxPaid).toBe(0);
+      expect(cash.projections[0].grossWithdrawal).toBe(3000000);
+      expect(cash.projections[1].accessible).toBe(97000000);
+      expect(gia.projections[0].taxPaid).toBeGreaterThan(0);
+      expect(gia.projections[1].accessible).toBeLessThan(97000000);
+    });
+
+    it('is drawn before GIA and ISA by default and reported in drawdownCashSavings', () => {
+      const funds = [
+        makeFund({ id: 'cash1', category: 'savings', subcategory: 'cash', wrapper: 'cash_savings' }),
+        makeFund({ id: 'gia1', category: 'savings', subcategory: 'equities', wrapper: 'gia' }),
+        makeFund({ id: 'isa1', category: 'savings', subcategory: 'equities', wrapper: 'isa' }),
+      ];
+      const snapshots = [
+        makeSnapshot({ fundId: 'cash1', value: 500000 }),
+        makeSnapshot({ fundId: 'gia1', value: 500000 }),
+        makeSnapshot({ fundId: 'isa1', value: 500000 }),
+      ];
+      const config = makeConfig({
+        targetAnnualSpend: 30000,
+        growthRates: { equities: 0, bonds: 0, cash: 0, property: 0 },
+        inflationRate: 0,
+        statePensionAmount: 0,
+        statePensionAge: 99,
+        withdrawalRates: [4],
+      });
+      const result = calculateFireProjections(funds, snapshots, config);
+
+      const p0 = result.projections[0];
+      expect(p0.drawdownCashSavings).toBe(30000);
+      expect(p0.drawdownGia).toBe(0);
+      expect(p0.drawdownIsa).toBe(0);
+      const p1 = result.projections[1];
+      expect(p1.cashSavings).toBe(470000);
+      expect(p1.gia).toBe(500000);
+      expect(p1.isa).toBe(500000);
+    });
+
+    it('is drawn even when a stored drawdown order predates the wrapper', () => {
+      const funds = [makeFund({ subcategory: 'cash', wrapper: 'cash_savings' })];
+      const snapshots = [makeSnapshot({ value: 1000000 })];
+      const config = makeConfig({
+        targetAnnualSpend: 30000,
+        growthRates: { equities: 0, bonds: 0, cash: 0, property: 0 },
+        inflationRate: 0,
+        statePensionAmount: 0,
+        statePensionAge: 99,
+        withdrawalRates: [4],
+        drawdownOrder: ['gia', 'none', 'isa', 'lisa', 'sipp'],
+      });
+      const result = calculateFireProjections(funds, snapshots, config);
+
+      expect(result.fireDates[0].age).toBe(36);
+      expect(result.projections[0].drawdownCashSavings).toBe(30000);
+      expect(result.projections[1].cashSavings).toBe(970000);
+    });
+
+    it("still excludes 'none' funds from the projection", () => {
+      const funds = [makeFund({ subcategory: 'cash', wrapper: 'none' })];
+      const snapshots = [makeSnapshot({ value: 100000 })];
+      const result = calculateFireProjections(funds, snapshots, noDrawdownConfig());
+
+      expect(result.projections[0].total).toBe(0);
+      expect(result.projections[0].cashSavings).toBe(0);
+    });
+  });
+
+  describe('normaliseDrawdownOrder', () => {
+    it('returns the default order when undefined', () => {
+      expect(normaliseDrawdownOrder(undefined)).toEqual(['cash_savings', 'gia', 'isa', 'lisa', 'sipp']);
+      expect(normaliseDrawdownOrder()).toEqual(DEFAULT_DRAWDOWN_ORDER);
+      expect(normaliseDrawdownOrder()).not.toBe(DEFAULT_DRAWDOWN_ORDER);
+    });
+
+    it("strips 'none' and prepends cash_savings to a legacy order", () => {
+      expect(normaliseDrawdownOrder(['gia', 'none', 'isa', 'lisa', 'sipp'])).toEqual(['cash_savings', 'gia', 'isa', 'lisa', 'sipp']);
+    });
+
+    it("leaves an order containing cash_savings as-is apart from stripping 'none'", () => {
+      expect(normaliseDrawdownOrder(['isa', 'cash_savings', 'gia', 'none', 'sipp'])).toEqual(['isa', 'cash_savings', 'gia', 'sipp']);
+      expect(normaliseDrawdownOrder(['sipp', 'cash_savings'])).toEqual(['sipp', 'cash_savings']);
     });
   });
 });

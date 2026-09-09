@@ -13,6 +13,7 @@ export default function WrapperBreakdownChart({ projections }: Props) {
     lisa: p.lisa ?? 0,
     sipp: p.sipp ?? 0,
     gia: p.gia ?? 0,
+    cashSavings: p.cashSavings ?? 0,
   }));
 
   return (
@@ -27,6 +28,7 @@ export default function WrapperBreakdownChart({ projections }: Props) {
         <Area type="monotone" dataKey="lisa" name="LISA" stackId="1" stroke="#10b981" fill="#a7f3d0" />
         <Area type="monotone" dataKey="sipp" name="SIPP" stackId="1" stroke="#8b5cf6" fill="#ddd6fe" />
         <Area type="monotone" dataKey="gia" name="GIA" stackId="1" stroke="#f97316" fill="#fed7aa" />
+        <Area type="monotone" dataKey="cashSavings" name="Cash savings" stackId="1" stroke="#84cc16" fill="#d9f99d" />
       </AreaChart>
     </ResponsiveContainer>
   );

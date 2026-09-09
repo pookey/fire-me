@@ -1,11 +1,14 @@
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { getFunds, createFund, updateFund } from '../utils/api';
+import { WRAPPER_LABELS } from '../types';
 import type { Fund, TaxWrapper } from '../types';
 import MonthYearPicker from '../components/MonthYearPicker';
 import { formatStartDate, isFutureMonth } from '../utils/dateHelpers';
 
 type FundForm = Omit<Fund, 'id'>;
+
+const WRAPPER_ORDER: TaxWrapper[] = ['isa', 'lisa', 'sipp', 'gia', 'cash_savings', 'none'];
 
 const emptyForm: FundForm = {
   name: '',
@@ -186,12 +189,11 @@ export default function Funds() {
                   onChange={e => setForm(prev => ({ ...prev, wrapper: e.target.value as TaxWrapper }))}
                   className="input-dark"
                 >
-                  <option value="isa">ISA</option>
-                  <option value="lisa">LISA</option>
-                  <option value="sipp">SIPP</option>
-                  <option value="gia">GIA</option>
-                  <option value="none">None</option>
+                  {WRAPPER_ORDER.map(w => (
+                    <option key={w} value={w}>{WRAPPER_LABELS[w]}</option>
+                  ))}
                 </select>
+                <p className="text-[0.6rem] mt-1" style={{ color: 'var(--text-muted)' }}>Excluded leaves the fund out of FIRE projections.</p>
               </div>
               <div>
                 <label className="block text-xs font-medium mb-1.5" style={{ color: 'var(--text-tertiary)' }}>Sort Order</label>
@@ -312,7 +314,7 @@ export default function Funds() {
                   </td>
                   <td className="capitalize">{fund.category}</td>
                   <td className="capitalize">{fund.subcategory}</td>
-                  <td className="uppercase">{fund.wrapper ?? '-'}</td>
+                  <td>{fund.wrapper ? WRAPPER_LABELS[fund.wrapper] : '-'}</td>
                   <td className="td-mono">
                     {fund.monthlyContribution
                       ? `£${fund.monthlyContribution}/mo${fund.contributionStartDate && isFutureMonth(fund.contributionStartDate) ? ` (from ${formatStartDate(fund.contributionStartDate)})` : ''}`
