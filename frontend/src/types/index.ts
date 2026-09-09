@@ -1,4 +1,14 @@
-export type TaxWrapper = 'isa' | 'lisa' | 'sipp' | 'gia' | 'none';
+export type TaxWrapper = 'isa' | 'lisa' | 'sipp' | 'gia' | 'cash_savings' | 'none';
+
+/** Display names for wrappers. 'none' means the fund is left out of FIRE projections entirely. */
+export const WRAPPER_LABELS: Record<TaxWrapper, string> = {
+  isa: 'ISA',
+  lisa: 'LISA',
+  sipp: 'SIPP',
+  gia: 'GIA',
+  cash_savings: 'Cash savings',
+  none: 'Excluded',
+};
 
 export interface Fund {
   id: string;
@@ -156,6 +166,7 @@ export interface FireProjection {
   lisa?: number;
   sipp?: number;
   gia?: number;
+  cashSavings?: number;
   taxPaid?: number;
   grossWithdrawal?: number;
   netIncome?: number;
@@ -165,6 +176,7 @@ export interface FireProjection {
   drawdownLisa?: number;
   drawdownSipp?: number;
   drawdownGia?: number;
+  drawdownCashSavings?: number;
   guaranteedIncome?: number;
   guaranteedIncomeTax?: number; // income tax on statePension + definedBenefitIncome
   accessibleBreakdown?: AssetBreakdown;

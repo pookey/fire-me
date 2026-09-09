@@ -9,7 +9,7 @@ Includes a **Claude Code skill** (`/fire-advisor`) that acts as an interactive F
 - Track funds across savings, pensions, and property with monthly snapshots
 - Net worth dashboard with historical charts
 - FIRE projection engine with configurable withdrawal rates, growth assumptions, and tax modelling
-- UK-specific: ISAs, SIPPs, LISAs, GIAs, state pension, pension access ages
+- UK-specific: ISAs, SIPPs, LISAs, GIAs, cash savings, state pension, pension access ages
 - Bridge stress testing (can your accessible savings survive until pension age?)
 - Income and expense tracking
 - Cognito authentication (single-user)

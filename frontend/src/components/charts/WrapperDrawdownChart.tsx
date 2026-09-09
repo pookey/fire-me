@@ -14,6 +14,7 @@ export default function WrapperDrawdownChart({ projections, pensionAccessAge }: 
     LISA: p.lisa ?? 0,
     SIPP: p.sipp ?? 0,
     GIA: p.gia ?? 0,
+    CashSavings: p.cashSavings ?? 0,
   }));
 
   return (
@@ -34,6 +35,7 @@ export default function WrapperDrawdownChart({ projections, pensionAccessAge }: 
         <Area type="monotone" dataKey="LISA" name="LISA" stackId="1" stroke="#10b981" fill="#10b981" fillOpacity={0.3} />
         <Area type="monotone" dataKey="SIPP" name="SIPP" stackId="1" stroke="#818cf8" fill="#818cf8" fillOpacity={0.3} />
         <Area type="monotone" dataKey="GIA" name="GIA" stackId="1" stroke="#f97316" fill="#f97316" fillOpacity={0.3} />
+        <Area type="monotone" dataKey="CashSavings" name="Cash savings" stackId="1" stroke="#84cc16" fill="#84cc16" fillOpacity={0.3} />
       </AreaChart>
     </ResponsiveContainer>
   );

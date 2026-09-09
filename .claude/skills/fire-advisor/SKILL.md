@@ -90,7 +90,7 @@ curl -s -H "Authorization: Bearer $TOKEN" "$API_BASE_URL/funds"
 
 ### Fund Structure
 Funds are defined dynamically in the database — **do not assume any specific funds exist**. Fetch them from `GET /funds` at the start of each session. Each fund has:
-- `name`, `category` (savings/pension/property), `subcategory` (equities/bonds/cash/property), `wrapper` (isa/lisa/sipp/gia/none), `active` (boolean)
+- `name`, `category` (savings/pension/property), `subcategory` (equities/bonds/cash/property), `wrapper` (isa/lisa/sipp/gia/cash_savings/none — `none` means the fund is excluded from FIRE projections entirely), `active` (boolean)
 - `description` (optional) — a free-text field where the user can provide context about a fund's purpose (e.g. "savings for home renovation", "old employer pension — not contributing"). **Always read fund descriptions** to understand the user's intent and situation for each fund. Use this context when giving advice.
 - Projection fields: `drawdownAge`, `monthlyContribution`, `contributionEndAge`, `take25PctLumpSum`
 
@@ -104,12 +104,12 @@ The projection engine is at `frontend/src/utils/fireCalculator.ts`. Read it to u
 Types are defined in `frontend/src/types/index.ts`.
 
 ### Key Concepts
-- **Accessible vs Locked**: Pension funds (SIPPs) are locked until `drawdownAge` (default: `pensionAccessAge`, currently 57 in UK). ISAs/GIAs are accessible immediately.
-- **Drawdown order**: The sequence funds are withdrawn in retirement. Default: GIA -> None -> ISA -> SIPP (tax-efficient order).
+- **Accessible vs Locked**: Pension funds (SIPPs) are locked until `drawdownAge` (default: `pensionAccessAge`, currently 57 in UK). ISAs, GIAs and cash savings are accessible immediately.
+- **Drawdown order**: The sequence funds are withdrawn in retirement. Default: Cash savings -> GIA -> ISA -> LISA -> SIPP (spend cash before selling investments, then tax-efficient order). Configs saved without `cash_savings` in their order are normalised to draw it before the other wrappers; `none` is never drawn.
 - **25% tax-free lump sum**: Can take 25% from SIPP tax-free at drawdown age (lifetime limit £268,275).
 - **Withdrawal rate**: The percentage of portfolio drawn annually. 4% is the classic "rule", 3.5% is conservative, 3% is very safe.
 - **State pension**: UK state pension kicks in at state pension age (currently 67-68).
-- **Tax wrappers**: ISA (tax-free), SIPP (income tax on withdrawal), GIA (CGT on gains), None (CGT).
+- **Tax wrappers**: ISA (tax-free), SIPP (income tax on withdrawal), GIA (CGT on gains), Cash savings (tax-free — no CGT on cash; interest is not modelled), None (excluded from projections).
 
 ## Analysis Capabilities
 
